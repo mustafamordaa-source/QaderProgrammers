@@ -139,6 +139,7 @@ def compute_metrics(
 ) -> tuple[SpeedKpi, QualityKpi, VolumeKpi, OnTimeKpi]:
     """Fold a set of tasks into the four KPI groups."""
     cycle_hours: list[float] = []
+    cycle_hours_by_week: dict[str, list[float]] = {}
     dwell_hours: dict[TaskStatus, list[float]] = {s: [] for s in TRACKED_STATUSES}
 
     submissions = 0
@@ -180,7 +181,9 @@ def compute_metrics(
             completed_total += 1
             per_week[_week_key(closed.timestamp)] += 1
             per_month[_month_key(closed.timestamp)] += 1
-            cycle_hours.append(_hours(closed.timestamp - task.created_at))
+            cycle = _hours(closed.timestamp - task.created_at)
+            cycle_hours.append(cycle)
+            cycle_hours_by_week.setdefault(_week_key(closed.timestamp), []).append(cycle)
 
             approved_tasks += 1
             if task_submissions == 1:
@@ -198,6 +201,9 @@ def compute_metrics(
         avg_cycle_time_hours=_mean(cycle_hours),
         median_cycle_time_hours=_median(cycle_hours),
         avg_time_in_status_hours={s.value: _mean(dwell_hours[s]) for s in TRACKED_STATUSES},
+        avg_cycle_time_per_week={
+            week: _mean(values) for week, values in sorted(cycle_hours_by_week.items())
+        },
     )
     quality = QualityKpi(
         review_submissions=submissions,

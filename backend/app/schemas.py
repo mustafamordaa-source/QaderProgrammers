@@ -139,6 +139,8 @@ class SpeedKpi(BaseModel):
     avg_cycle_time_hours: float | None
     median_cycle_time_hours: float | None
     avg_time_in_status_hours: dict[str, float | None]
+    # Keyed by ISO week ("2026-W12") of the closing event, for the trend chart.
+    avg_cycle_time_per_week: dict[str, float]
 
 
 class QualityKpi(BaseModel):

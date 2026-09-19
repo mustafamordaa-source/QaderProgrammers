@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design tokens. The dark column is a selected set of steps for the dark
+   surface, not an automatic inversion of the light one. Declared under both the
+   OS media query and an explicit [data-theme] scope so the in-app toggle wins
+   either way. */
+:root {
+  color-scheme: light;
+
+  --page: #f9f9f7;
+  --surface-1: #ffffff;
+  --surface-2: #f4f4f1;
+
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+
+  --border: rgba(11, 11, 11, 0.1);
+  --grid: #e1e0d9;
+  --baseline: #c3c2b7;
+
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) {
+    color-scheme: dark;
+
+    --page: #0d0d0d;
+    --surface-1: #16161a;
+    --surface-2: #1f1f23;
+
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+
+    --border: rgba(255, 255, 255, 0.12);
+    --grid: #2c2c2a;
+    --baseline: #383835;
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --page: #0d0d0d;
+  --surface-1: #16161a;
+  --surface-2: #1f1f23;
+
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+
+  --border: rgba(255, 255, 255, 0.12);
+  --grid: #2c2c2a;
+  --baseline: #383835;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+}
+
+body {
+  margin: 0;
+  background-color: var(--page);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Axis ticks and table figures align vertically; standalone stat values keep
+   the default proportional figures. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 2px;
+}

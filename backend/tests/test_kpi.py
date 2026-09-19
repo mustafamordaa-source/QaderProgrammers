@@ -329,3 +329,31 @@ class TestKpiRoutes:
 
     def test_leader_kpi_me_falls_back_to_the_team_view(self, client, auth, leader):
         assert client.get("/kpi/me", headers=auth(leader)).json()["scope"] == "team"
+
+
+class TestCycleTimeTrend:
+    def test_cycle_time_is_bucketed_by_the_week_it_closed_in(self, make_task, flow):
+        fast = make_task(title="fast", created_at=BASE)
+        flow(fast, [
+            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_review, 2),
+            (EventType.approved, None, S.done, 10),
+            (EventType.closed, None, S.done, 10),
+        ])
+        slow = make_task(title="slow", created_at=BASE)
+        flow(slow, [
+            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_review, 2),
+            (EventType.approved, None, S.done, 20),
+            (EventType.closed, None, S.done, 20),
+        ])
+        next_week = make_task(title="next week", created_at=BASE)
+        flow(next_week, [
+            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_review, 2),
+            (EventType.approved, None, S.done, 24 * 8),
+            (EventType.closed, None, S.done, 24 * 8),
+        ])
+        speed, *_ = _metrics([fast, slow, next_week])
+        # 10h and 20h closed in W10, 192h in W11.
+        assert speed.avg_cycle_time_per_week == {"2026-W10": 15.0, "2026-W11": 192.0}
