@@ -40,19 +40,29 @@ The Vite dev server proxies `/auth`, `/tasks`, `/users` and `/kpi` to the backen
 browser only ever talks to one origin and there is nothing to configure. For a
 production build pointed at another host, set `VITE_API_URL`.
 
-### Demo accounts
+### First sign-in
+
+`seed.py` creates one account — the leader — and nothing else. No sample
+programmers, no sample tasks: the board and the dashboards start empty and fill
+with real work.
 
 | Role | Email | Password |
 |---|---|---|
-| Leader | `leader@qader.dev` | `password123` |
-| Programmer | `sara@qader.dev` | `password123` |
-| Programmer | `omar@qader.dev` | `password123` |
-| Programmer | `lina@qader.dev` | `password123` |
-| Programmer | `yusuf@qader.dev` | `password123` |
+| Leader | `leader@qader.dev` | `password123`, or whatever `--password` sets |
 
-The seed script backdates roughly ten weeks of task history — varied cycle
-times, some rejections, some missed deadlines — so the KPI dashboard has real
-numbers on first run. Re-running it is a no-op unless you pass `--reset`.
+The password is printed when the script runs, which is the only place it is
+surfaced — the login screen deliberately hints at no credentials. Change it
+after signing in, or pass `--password` up front:
+
+```bash
+python seed.py --reset --password 'something-better'
+```
+
+Add the rest of the team from the **People** screen once you are in. Re-running
+the script is a no-op unless you pass `--reset`.
+
+Because nothing is pre-populated, the KPI dashboard is empty until tasks have
+been created and closed.
 
 ### Tests
 

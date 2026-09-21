@@ -83,13 +83,6 @@ export default function LoginPage() {
             {submitting ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-
-        <p className="mt-6 text-center text-xs leading-relaxed text-ink-muted">
-          Seeded demo accounts: <code>leader@qader.dev</code> or{' '}
-          <code>sara@qader.dev</code>
-          <br />
-          Password <code>password123</code>
-        </p>
       </div>
     </main>
   )
