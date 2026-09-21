@@ -29,23 +29,30 @@ function durationAxis(values) {
 }
 
 /**
- * Completions per week. One measure over time with a natural zero, so bars —
- * and one series, so the title names it and no legend is needed.
+ * Throughput per week, measured in points. One measure over time with a natural
+ * zero, so bars — and one series, so the title names it and no legend is needed.
+ *
+ * Points rather than task counts, because a week of three 13-pointers is not
+ * the same week as three 1-pointers. The task count rides along in the tooltip
+ * and the table so the item view is still one click away.
  */
-export function CompletionsChart({ perWeek }) {
-  const data = Object.entries(perWeek).map(([week, count]) => ({
-    week,
-    label: formatWeekKey(week),
-    count,
-  }))
+export function CompletionsChart({ perWeek, pointsPerWeek }) {
+  const data = Object.keys({ ...pointsPerWeek, ...perWeek })
+    .sort()
+    .map((week) => ({
+      week,
+      label: formatWeekKey(week),
+      points: pointsPerWeek[week] ?? 0,
+      count: perWeek[week] ?? 0,
+    }))
 
   return (
     <ChartCard
-      title="Tasks completed per week"
-      subtitle="By the week the task was closed"
+      title="Points completed per week"
+      subtitle="Difficulty-weighted throughput, by the week the task was closed"
       table={{
-        columns: ['Week of', 'Completed'],
-        rows: data.map((row) => [row.label, row.count]),
+        columns: ['Week of', 'Points', 'Tasks'],
+        rows: data.map((row) => [row.label, row.points, row.count]),
       }}
     >
       {data.length === 0 ? (
@@ -58,10 +65,18 @@ export function CompletionsChart({ perWeek }) {
             <YAxis allowDecimals={false} {...axisProps} />
             <RechartsTooltip
               cursor={{ fill: 'var(--surface-2)' }}
-              content={<Tooltip formatter={(value) => `${value} completed`} />}
+              content={
+                <Tooltip
+                  formatter={(value, entry) =>
+                    `${value} point${value === 1 ? '' : 's'} · ${entry?.count ?? 0} task${
+                      entry?.count === 1 ? '' : 's'
+                    }`
+                  }
+                />
+              }
             />
             {/* 4px rounded ends at the data end only; the baseline stays square. */}
-            <Bar dataKey="count" fill={SERIES_1} radius={[4, 4, 0, 0]} maxBarSize={44} />
+            <Bar dataKey="points" fill={SERIES_1} radius={[4, 4, 0, 0]} maxBarSize={44} />
           </BarChart>
         </ResponsiveContainer>
       )}
@@ -175,11 +190,23 @@ export function TimeInStatusChart({ perStatus }) {
  * comparison honest.
  */
 const MEASURES = {
+  points: {
+    label: 'Points completed',
+    value: (report) => report.volume.points_completed,
+    format: (value) => `${value} pts`,
+    allowDecimals: false,
+  },
   completed: {
     label: 'Tasks completed',
     value: (report) => report.volume.completed_total,
     format: (value) => String(value),
     allowDecimals: false,
+  },
+  perPoint: {
+    label: 'Hours per point',
+    value: (report) => report.speed.hours_per_point ?? 0,
+    format: formatHours,
+    allowDecimals: true,
   },
   cycle: {
     label: 'Avg cycle time',
@@ -187,10 +214,10 @@ const MEASURES = {
     format: formatHours,
     allowDecimals: true,
   },
-  open: {
-    label: 'Open tasks',
-    value: (report) => report.volume.open_total,
-    format: (value) => String(value),
+  openPoints: {
+    label: 'Open points',
+    value: (report) => report.volume.open_points_total,
+    format: (value) => `${value} pts`,
     allowDecimals: false,
   },
 }
@@ -268,32 +295,45 @@ export function ProgrammerComparison({ reports, measure, onMeasureChange, onSele
   )
 }
 
-/** Current open work by stage. A plain list — five numbers don't need a plot. */
-export function OpenByStatus({ openByStatus, openTotal }) {
+/**
+ * Current open work by stage. A plain list — five numbers don't need a plot.
+ * The bar is sized by points, so a stage holding one 13-pointer reads as
+ * heavier than one holding two 1-pointers.
+ */
+export function OpenByStatus({ openByStatus, openPointsByStatus, openTotal, openPointsTotal }) {
   const entries = Object.entries(openByStatus)
-  const max = Math.max(1, ...entries.map(([, count]) => count))
+  const max = Math.max(1, ...entries.map(([status]) => openPointsByStatus?.[status] ?? 0))
 
   return (
     <div className="rounded-xl border border-hairline bg-surface p-4">
       <h3 className="text-sm font-semibold">Open work right now</h3>
       <p className="mt-0.5 text-xs text-ink-muted">
-        {openTotal} task{openTotal === 1 ? '' : 's'} not yet closed
+        {openPointsTotal} point{openPointsTotal === 1 ? '' : 's'} across {openTotal} task
+        {openTotal === 1 ? '' : 's'}, not yet closed
       </p>
       <ul className="mt-3 space-y-2">
-        {entries.map(([status, count]) => (
-          <li key={status} className="flex items-center gap-3">
-            <span className="w-14 shrink-0 text-xs text-ink-secondary">
-              {STATUS_SHORT_LABELS[status] ?? status}
-            </span>
-            <span className="h-2 flex-1 overflow-hidden rounded-full bg-surface-raised">
-              <span
-                className="block h-full rounded-full bg-series1"
-                style={{ width: `${(count / max) * 100}%` }}
-              />
-            </span>
-            <span className="tabular w-6 shrink-0 text-right text-xs text-ink">{count}</span>
-          </li>
-        ))}
+        {entries.map(([status, count]) => {
+          const points = openPointsByStatus?.[status] ?? 0
+          return (
+            <li key={status} className="flex items-center gap-3">
+              <span className="w-14 shrink-0 text-xs text-ink-secondary">
+                {STATUS_SHORT_LABELS[status] ?? status}
+              </span>
+              <span className="h-2 flex-1 overflow-hidden rounded-full bg-surface-raised">
+                <span
+                  className="block h-full rounded-full bg-series1"
+                  style={{ width: `${(points / max) * 100}%` }}
+                />
+              </span>
+              <span className="tabular w-16 shrink-0 whitespace-nowrap text-right text-xs text-ink">
+                {points} pt{points === 1 ? '' : 's'}
+              </span>
+              <span className="tabular w-16 shrink-0 whitespace-nowrap text-right text-xs text-ink-muted">
+                {count} task{count === 1 ? '' : 's'}
+              </span>
+            </li>
+          )
+        })}
       </ul>
     </div>
   )

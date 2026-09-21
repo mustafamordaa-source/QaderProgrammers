@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from app.models import EventType, Priority, Role, TaskStatus
+from app.models import DEFAULT_POINTS, POINT_VALUES, EventType, Priority, Role, TaskStatus
 
 
 class ORMModel(BaseModel):
@@ -87,6 +87,13 @@ class PasswordReset(BaseModel):
 # --- tasks ------------------------------------------------------------------
 
 
+def _validate_points(value: int | None) -> int | None:
+    if value is not None and value not in POINT_VALUES:
+        allowed = ", ".join(str(v) for v in POINT_VALUES)
+        raise ValueError(f"points must be one of: {allowed}")
+    return value
+
+
 class TaskEventOut(ORMModel):
     id: int
     task_id: int
@@ -104,6 +111,7 @@ class TaskOut(ORMModel):
     title: str
     description: str | None
     priority: Priority
+    points: int
     status: TaskStatus
     due_date: datetime | None
     created_by: int
@@ -136,9 +144,12 @@ class TaskCreate(_AssigneeValidatorMixin):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=10_000)
     priority: Priority = Priority.medium
+    points: int = DEFAULT_POINTS
     due_date: datetime | None = None
     assignee_1_id: int | None = None
     assignee_2_id: int | None = None
+
+    _check_points = field_validator("points")(staticmethod(_validate_points))
 
     @field_validator("title")
     @classmethod
@@ -155,7 +166,10 @@ class TaskUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=10_000)
     priority: Priority | None = None
+    points: int | None = None
     due_date: datetime | None = None
+
+    _check_points = field_validator("points")(staticmethod(_validate_points))
 
 
 class TaskAssign(_AssigneeValidatorMixin):
@@ -190,6 +204,9 @@ class SpeedKpi(BaseModel):
     avg_time_in_status_hours: dict[str, float | None]
     # Keyed by ISO week ("2026-W12") of the closing event, for the trend chart.
     avg_cycle_time_per_week: dict[str, float]
+    # Total cycle hours divided by total points — a weighted rate, so hard work
+    # is not penalised for taking longer. See the note in kpi/service.py.
+    hours_per_point: float | None
 
 
 class QualityKpi(BaseModel):
@@ -205,6 +222,13 @@ class VolumeKpi(BaseModel):
     completed_per_month: dict[str, int]
     open_by_status: dict[str, int]
     open_total: int
+    # Difficulty-weighted counterparts of the figures above.
+    points_completed: int
+    points_per_week: dict[str, int]
+    points_per_month: dict[str, int]
+    open_points_by_status: dict[str, int]
+    open_points_total: int
+    avg_points_per_task: float | None
 
 
 class OnTimeKpi(BaseModel):

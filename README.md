@@ -58,11 +58,12 @@ numbers on first run. Re-running it is a no-op unless you pass `--reset`.
 
 ```bash
 cd backend
-.venv/bin/python -m pytest         # 122 tests
+.venv/bin/python -m pytest         # 153 tests
 ```
 
 They cover the transition matrix, the role guards, task visibility, user
-management and the KPI arithmetic, each against a fresh in-memory database.
+management, the difficulty scale and the KPI arithmetic, each against a fresh
+in-memory database.
 
 ```bash
 cd frontend
@@ -73,7 +74,7 @@ npm run check:routes               # client routes vs API paths (also runs on bu
 
 ## Roles
 
-**Leader** creates tasks, sets priority, due date and assignees, and is the only
+**Leader** creates tasks, sets priority, difficulty, due date and assignees, and is the only
 role that can move a task to Done. Sees every task and every programmer's
 metrics, can reassign or edit anything, and manages accounts (see
 [People](#people)).
@@ -145,12 +146,30 @@ active leader returns `409`, because there would be no way left to approve work
 or restore anyone's access. Handing over works fine — promote someone first,
 then demote yourself.
 
+## Difficulty points
+
+Every task carries a difficulty, set by the leader when it is created and
+editable afterwards from the task detail view. The scale is Fibonacci —
+**1, 2, 3, 5, 8, 13** — labelled Trivial through Huge. Off-scale values are
+rejected by the API and by a `CHECK` constraint on the table; the allowed set
+lives in one place, `POINT_VALUES` in `backend/app/models.py`.
+
+The widening gaps are the reason for a Fibonacci scale rather than 1–5: they
+remove the argument over whether something is a 6 or a 7, and they give a
+genuinely large task a bucket of its own instead of squashing it into the top
+of a linear range alongside work half its size.
+
+**Difficulty is not priority.** Priority is urgency — when this needs to be
+done. Points are effort — how much work it is. A one-line config fix can be
+urgent and trivial at the same time, so the two are separate fields and the
+picker says so.
+
 ## Data model
 
 **users** — id, name, email, password_hash, role, is_active, created_at
 
-**tasks** — id, title, description, priority, status, due_date, created_by,
-assignee_1_id, assignee_2_id, created_at, updated_at
+**tasks** — id, title, description, priority, points, status, due_date,
+created_by, assignee_1_id, assignee_2_id, created_at, updated_at
 
 **task_events** — id, task_id, actor_id, event_type, from_status, to_status,
 comment, timestamp
@@ -179,19 +198,34 @@ it is derived from `tasks` + `task_events`; there is no separate bookkeeping.
 
 **Speed** — average and median cycle time (created → closed), plus average
 dwell time in `to_do`, `in_progress_front`, `in_progress_back` and `in_review`,
-and a per-week cycle-time series for the trend chart.
+a per-week cycle-time series for the trend chart, and **hours per point**.
 
 **Quality** — rejection rate (`rejected` events ÷ review submissions) and
 first-pass rate (tasks approved on a single submission ÷ tasks completed).
 
-**Volume** — completions per week and per month, plus currently-open tasks
-broken down by status.
+**Volume** — completions per week and per month and open work by status, each
+reported twice: as a task count and as a points total, plus average points per
+completed task.
 
 **On-time** — share of completed tasks closed on or before their due date.
 Tasks without a due date are excluded from the denominator rather than counted
 as successes.
 
-### Two decisions worth knowing about
+### Three decisions worth knowing about
+
+**Volume is reported in points and in tasks, with points leading.** Counting
+tasks alone rates a 13-point rewrite the same as a 1-point copy change, which
+is what difficulty points exist to fix. But counting only points would hide
+that someone shipped twelve things. Both figures are computed everywhere, the
+dashboard leads with points, and the chart table views show both columns.
+
+**Hours per point is total hours over total points**, not the average of each
+task's own ratio. It is a rate, and the honest way to aggregate a rate is total
+over total. Averaging per-task ratios lets a handful of 1-pointers — where a
+few hours of ordinary latency dominates the number — swamp the figure: two
+tasks at 100h/1pt and 20h/13pt average to 51 hours per point that way, against
+a true 120/14 ≈ 8.6. Raw cycle time is kept alongside it, because that is what
+a deadline is promised against.
 
 **Credit follows assignment, not the actor.** A leader performs every `done`
 transition, so crediting `task_events.actor_id` would hand the leader every
@@ -296,8 +330,8 @@ Backend settings come from the environment (or a `backend/.env` file):
 
 - The schema is created with `Base.metadata.create_all`, which adds new tables
   but **not new columns to existing ones**. An existing `taskflow.db` from
-  before `users.is_active` was added will fail on startup; re-run
-  `python seed.py --reset`. This is the point at which Alembic stops being
+  before `users.is_active` or `tasks.points` was added will fail on startup;
+  re-run `python seed.py --reset`. This is the point at which Alembic stops being
   optional — the next schema change that has to preserve real data needs it.
 - Tokens are stored in `localStorage`, which is appropriate for an internal tool
   but is not XSS-proof. Move to an httpOnly cookie if this is ever exposed more

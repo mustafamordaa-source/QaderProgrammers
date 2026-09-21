@@ -83,6 +83,7 @@ export const api = {
   tasks: () => request('/tasks'),
   task: (id) => request(`/tasks/${id}`),
   createTask: (payload) => request('/tasks', { method: 'POST', body: payload }),
+  updateTask: (id, payload) => request(`/tasks/${id}`, { method: 'PATCH', body: payload }),
   changeStatus: (id, status, comment) =>
     request(`/tasks/${id}/status`, { method: 'PATCH', body: { status, comment } }),
   assign: (id, assignee1, assignee2) =>

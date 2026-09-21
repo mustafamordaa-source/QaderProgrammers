@@ -12,6 +12,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
 )
@@ -35,6 +36,14 @@ class Priority(str, enum.Enum):
     medium = "medium"
     high = "high"
     urgent = "urgent"
+
+
+# Difficulty is estimated on a Fibonacci scale. The widening gaps are the point:
+# they remove the argument over whether something is a 6 or a 7, and force a
+# genuinely large task into a bucket of its own instead of being squashed into
+# the top of a linear scale. Distinct from `priority`, which is urgency.
+POINT_VALUES: tuple[int, ...] = (1, 2, 3, 5, 8, 13)
+DEFAULT_POINTS = 3
 
 
 class TaskStatus(str, enum.Enum):
@@ -90,6 +99,8 @@ class Task(Base):
         _str_enum(TaskStatus, "task_status"), default=TaskStatus.to_do, nullable=False, index=True
     )
     due_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # How hard the task is, set by the leader. See POINT_VALUES.
+    points: Mapped[int] = mapped_column(Integer, default=DEFAULT_POINTS, nullable=False)
 
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     assignee_1_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
@@ -107,11 +118,15 @@ class Task(Base):
         back_populates="task", cascade="all, delete-orphan", order_by="TaskEvent.timestamp"
     )
 
-    # The same person must not occupy both assignee slots.
     __table_args__ = (
+        # The same person must not occupy both assignee slots.
         CheckConstraint(
             "assignee_2_id IS NULL OR assignee_1_id IS NULL OR assignee_1_id != assignee_2_id",
             name="ck_tasks_distinct_assignees",
+        ),
+        CheckConstraint(
+            "points IN (%s)" % ", ".join(str(value) for value in POINT_VALUES),
+            name="ck_tasks_points_on_scale",
         ),
     )
 

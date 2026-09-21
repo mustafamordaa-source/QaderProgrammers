@@ -44,6 +44,21 @@ export function allowedTargets(current, role) {
   )
 }
 
+// Difficulty, set by the leader. Mirrors POINT_VALUES in backend/app/models.py
+// — a Fibonacci scale, so the gaps widen and nobody argues over a 6 vs a 7.
+// This is effort, not urgency; `priority` is the urgency axis.
+export const POINT_VALUES = [1, 2, 3, 5, 8, 13]
+export const DEFAULT_POINTS = 3
+
+export const POINT_LABELS = {
+  1: 'Trivial',
+  2: 'Easy',
+  3: 'Moderate',
+  5: 'Hard',
+  8: 'Very hard',
+  13: 'Huge',
+}
+
 export const PRIORITIES = ['low', 'medium', 'high', 'urgent']
 
 export const PRIORITY_LABELS = {

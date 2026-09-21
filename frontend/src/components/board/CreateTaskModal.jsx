@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Modal from '../Modal'
-import { PRIORITIES, PRIORITY_LABELS } from '../../lib/constants'
+import PointsPicker from './PointsPicker'
+import { DEFAULT_POINTS, PRIORITIES, PRIORITY_LABELS } from '../../lib/constants'
 import { fromDateInputValue } from '../../lib/format'
 
 const inputClass =
@@ -11,6 +12,7 @@ export default function CreateTaskModal({ programmers, onClose, onCreate }) {
     title: '',
     description: '',
     priority: 'medium',
+    points: DEFAULT_POINTS,
     due_date: '',
     assignee_1_id: '',
     assignee_2_id: '',
@@ -31,6 +33,7 @@ export default function CreateTaskModal({ programmers, onClose, onCreate }) {
         title: form.title.trim(),
         description: form.description.trim() || null,
         priority: form.priority,
+        points: form.points,
         due_date: fromDateInputValue(form.due_date, true),
         assignee_1_id: form.assignee_1_id ? Number(form.assignee_1_id) : null,
         assignee_2_id: form.assignee_2_id ? Number(form.assignee_2_id) : null,
@@ -104,6 +107,10 @@ export default function CreateTaskModal({ programmers, onClose, onCreate }) {
               className={inputClass}
             />
           </div>
+        </div>
+
+        <div className="mt-4">
+          <PointsPicker value={form.points} onChange={(points) => update('points', points)} />
         </div>
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">

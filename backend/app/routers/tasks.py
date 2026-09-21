@@ -74,6 +74,7 @@ def create_task(
         title=payload.title,
         description=payload.description,
         priority=payload.priority,
+        points=payload.points,
         status=TaskStatus.to_do,
         due_date=payload.due_date,
         created_by=leader.id,

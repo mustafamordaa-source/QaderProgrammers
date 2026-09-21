@@ -124,12 +124,14 @@ def make_task(db_session, leader):
         assignee_2: User | None = None,
         due_in_days: int | None = None,
         created_at: datetime | None = None,
+        points: int = 3,
     ) -> Task:
         created = created_at or datetime(2026, 1, 1, 9, 0, 0)
         task = Task(
             title=title,
             description=None,
             priority=Priority.medium,
+            points=points,
             status=status,
             due_date=created + timedelta(days=due_in_days) if due_in_days is not None else None,
             created_by=leader.id,

@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import Modal from '../Modal'
-import { OverdueBadge, PriorityBadge, StatusBadge } from '../Badges'
+import { OverdueBadge, PointsBadge, PriorityBadge, StatusBadge } from '../Badges'
 import {
   EVENT_LABELS,
   STATUS_LABELS,
   STATUS_SHORT_LABELS,
   allowedTargets,
 } from '../../lib/constants'
+import PointsPicker from './PointsPicker'
 import { formatDate, formatDateTime, isOverdue } from '../../lib/format'
 
 function AuditTrail({ events }) {
@@ -53,11 +54,12 @@ function AuditTrail({ events }) {
   )
 }
 
-export default function TaskDetailModal({ task, role, onClose, onMove, onReject }) {
+export default function TaskDetailModal({ task, role, onClose, onMove, onReject, onReestimate }) {
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [rejectTarget, setRejectTarget] = useState(null)
   const [comment, setComment] = useState('')
+  const [reestimating, setReestimating] = useState(false)
 
   const targets = allowedTargets(task.status, role)
   const isLeader = role === 'leader'
@@ -93,6 +95,7 @@ export default function TaskDetailModal({ task, role, onClose, onMove, onReject 
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         <StatusBadge status={task.status} />
+        <PointsBadge points={task.points} withLabel />
         <PriorityBadge priority={task.priority} />
         {isOverdue(task.due_date, task.status) && <OverdueBadge />}
       </div>
@@ -101,6 +104,41 @@ export default function TaskDetailModal({ task, role, onClose, onMove, onReject 
         <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-ink-secondary">
           {task.description}
         </p>
+      )}
+
+      {/* Estimates are wrong sometimes; the leader can correct one without
+          rebuilding the task. */}
+      {isLeader && (
+        <div className="mt-4">
+          {reestimating ? (
+            <div className="rounded-lg border border-hairline p-3">
+              <PointsPicker
+                value={task.points}
+                onChange={(points) =>
+                  run(async () => {
+                    await onReestimate(task, points)
+                    setReestimating(false)
+                  })
+                }
+              />
+              <button
+                type="button"
+                onClick={() => setReestimating(false)}
+                className="mt-2 text-xs text-ink-secondary underline-offset-2 hover:underline"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setReestimating(true)}
+              className="text-xs text-ink-secondary underline-offset-2 hover:text-ink hover:underline"
+            >
+              Change difficulty
+            </button>
+          )}
+        </div>
       )}
 
       <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">

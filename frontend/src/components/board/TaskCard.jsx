@@ -1,4 +1,4 @@
-import { OverdueBadge, PriorityBadge } from '../Badges'
+import { OverdueBadge, PointsBadge, PriorityBadge } from '../Badges'
 import { formatDate, initials, isOverdue } from '../../lib/format'
 
 function Assignees({ task }) {
@@ -46,6 +46,7 @@ export default function TaskCard({ task, onOpen, onDragStart, draggable }) {
       </button>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+        <PointsBadge points={task.points} />
         <PriorityBadge priority={task.priority} />
         {overdue && <OverdueBadge />}
       </div>

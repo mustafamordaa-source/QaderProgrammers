@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.models import TaskStatus
 
 
@@ -279,3 +281,59 @@ class TestAssignment:
             f"/tasks/{task.id}/assign", headers=auth(alice), json={"assignee_1_id": bob.id}
         )
         assert response.status_code == 403
+
+
+class TestPoints:
+    """Difficulty is set by the leader on the Fibonacci scale in POINT_VALUES."""
+
+    def test_defaults_to_the_middle_of_the_scale(self, client, auth, leader):
+        response = client.post("/tasks", headers=auth(leader), json={"title": "x"})
+        assert response.status_code == 201
+        assert response.json()["points"] == 3
+
+    @pytest.mark.parametrize("points", [1, 2, 3, 5, 8, 13])
+    def test_every_scale_value_is_accepted(self, client, auth, leader, points):
+        response = client.post(
+            "/tasks", headers=auth(leader), json={"title": "x", "points": points}
+        )
+        assert response.status_code == 201
+        assert response.json()["points"] == points
+
+    @pytest.mark.parametrize("points", [0, -1, 4, 6, 7, 9, 21, 100])
+    def test_off_scale_values_are_rejected(self, client, auth, leader, points):
+        response = client.post(
+            "/tasks", headers=auth(leader), json={"title": "x", "points": points}
+        )
+        assert response.status_code == 422
+
+    def test_points_are_independent_of_priority(self, client, auth, leader):
+        """Urgency and difficulty are separate axes: a trivial task can be urgent."""
+        response = client.post(
+            "/tasks",
+            headers=auth(leader),
+            json={"title": "x", "priority": "urgent", "points": 1},
+        )
+        assert response.json()["priority"] == "urgent"
+        assert response.json()["points"] == 1
+
+    def test_leader_can_re_estimate_an_existing_task(self, client, auth, leader, make_task):
+        task = make_task()
+        response = client.patch(f"/tasks/{task.id}", headers=auth(leader), json={"points": 8})
+        assert response.status_code == 200
+        assert response.json()["points"] == 8
+
+    def test_re_estimating_off_scale_is_rejected(self, client, auth, leader, make_task):
+        task = make_task()
+        assert (
+            client.patch(f"/tasks/{task.id}", headers=auth(leader), json={"points": 4}).status_code
+            == 422
+        )
+
+    def test_programmers_cannot_re_estimate(self, client, auth, alice, make_task):
+        task = make_task(assignee_1=alice)
+        response = client.patch(f"/tasks/{task.id}", headers=auth(alice), json={"points": 13})
+        assert response.status_code == 403
+
+    def test_points_are_visible_to_the_assignee(self, client, auth, alice, make_task):
+        task = make_task(assignee_1=alice, points=8)
+        assert client.get(f"/tasks/{task.id}", headers=auth(alice)).json()["points"] == 8

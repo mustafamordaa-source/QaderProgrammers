@@ -357,3 +357,142 @@ class TestCycleTimeTrend:
         speed, *_ = _metrics([fast, slow, next_week])
         # 10h and 20h closed in W10, 192h in W11.
         assert speed.avg_cycle_time_per_week == {"2026-W10": 15.0, "2026-W11": 192.0}
+
+
+class TestPointsWeighting:
+    """Volume is reported both as task counts and as difficulty-weighted points."""
+
+    def _complete(self, make_task, flow, *, title, points, hours, due_in_days=None, **kwargs):
+        task = make_task(
+            title=title, created_at=BASE, points=points, due_in_days=due_in_days, **kwargs
+        )
+        return flow(task, [
+            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_review, 2),
+            (EventType.approved, None, S.done, hours),
+            (EventType.closed, None, S.done, hours),
+        ])
+
+    def test_points_are_summed_alongside_the_task_count(self, make_task, flow):
+        tasks = [
+            self._complete(make_task, flow, title="a", points=13, hours=10),
+            self._complete(make_task, flow, title="b", points=1, hours=4),
+        ]
+        *_, volume, _ = _metrics(tasks)
+        assert volume.completed_total == 2
+        assert volume.points_completed == 14
+
+    def test_one_hard_task_outweighs_several_trivial_ones(self, make_task, flow):
+        """The whole point of the scale: counting tasks alone says the two sides
+        are equal, counting points says they are not."""
+        hard = [self._complete(make_task, flow, title="hard", points=13, hours=40)]
+        easy = [
+            self._complete(make_task, flow, title=f"easy-{i}", points=1, hours=3)
+            for i in range(3)
+        ]
+        *_, hard_volume, _ = _metrics(hard)
+        *_, easy_volume, _ = _metrics(easy)
+
+        assert hard_volume.completed_total < easy_volume.completed_total
+        assert hard_volume.points_completed > easy_volume.points_completed
+
+    def test_points_are_bucketed_by_week_and_month(self, make_task, flow):
+        first = self._complete(make_task, flow, title="first", points=5, hours=3)
+        later = self._complete(make_task, flow, title="later", points=8, hours=24 * 8)
+        *_, volume, _ = _metrics([first, later])
+        assert volume.points_per_week == {"2026-W10": 5, "2026-W11": 8}
+        assert volume.points_per_month == {"2026-03": 13}
+
+    def test_average_points_per_task(self, make_task, flow):
+        tasks = [
+            self._complete(make_task, flow, title="a", points=8, hours=5),
+            self._complete(make_task, flow, title="b", points=2, hours=5),
+        ]
+        *_, volume, _ = _metrics(tasks)
+        assert volume.avg_points_per_task == 5.0
+
+    def test_open_work_is_weighted_too(self, make_task, flow):
+        a = make_task(title="a", created_at=BASE, points=13)
+        flow(a, [(EventType.status_changed, None, S.in_progress_front, 1)])
+        b = make_task(title="b", created_at=BASE, points=2)
+        flow(b, [])
+        *_, volume, _ = _metrics([a, b])
+        assert volume.open_total == 2
+        assert volume.open_points_total == 15
+        assert volume.open_points_by_status["in_progress_front"] == 13
+        assert volume.open_points_by_status["to_do"] == 2
+
+    def test_points_are_zero_when_nothing_is_complete(self, make_task, flow):
+        task = make_task(created_at=BASE, points=8)
+        flow(task, [])
+        *_, volume, _ = _metrics([task])
+        assert volume.points_completed == 0
+        assert volume.avg_points_per_task is None
+
+
+class TestHoursPerPoint:
+    def _complete(self, make_task, flow, *, title, points, hours):
+        task = make_task(title=title, created_at=BASE, points=points)
+        return flow(task, [
+            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.approved, None, S.done, hours),
+            (EventType.closed, None, S.done, hours),
+        ])
+
+    def test_it_is_total_hours_over_total_points(self, make_task, flow):
+        tasks = [
+            self._complete(make_task, flow, title="a", points=8, hours=40),
+            self._complete(make_task, flow, title="b", points=2, hours=10),
+        ]
+        speed, *_ = _metrics(tasks)
+        # 50 hours across 10 points.
+        assert speed.hours_per_point == 5.0
+
+    def test_a_small_noisy_task_does_not_swamp_the_rate(self, make_task, flow):
+        """Averaging each task's own ratio would give (100/1 + 20/10) / 2 = 51.
+        Aggregating totals gives 120 / 11 ≈ 10.9, which is the honest figure."""
+        tasks = [
+            self._complete(make_task, flow, title="tiny", points=1, hours=100),
+            self._complete(make_task, flow, title="big", points=13, hours=20),
+        ]
+        speed, *_ = _metrics(tasks)
+        assert speed.hours_per_point == round(120 / 14, 2)
+
+    def test_harder_work_is_not_penalised_for_taking_longer(self, make_task, flow):
+        """A 3-day 8-pointer is better throughput than a 2-day 1-pointer, even
+        though its raw cycle time is worse."""
+        big = [self._complete(make_task, flow, title="big", points=8, hours=72)]
+        small = [self._complete(make_task, flow, title="small", points=1, hours=48)]
+        big_speed, *_ = _metrics(big)
+        small_speed, *_ = _metrics(small)
+
+        assert big_speed.avg_cycle_time_hours > small_speed.avg_cycle_time_hours
+        assert big_speed.hours_per_point < small_speed.hours_per_point
+
+    def test_it_is_none_without_completed_work(self, make_task, flow):
+        task = make_task(created_at=BASE, points=5)
+        flow(task, [])
+        speed, *_ = _metrics([task])
+        assert speed.hours_per_point is None
+
+
+class TestPointsAttribution:
+    def test_a_shared_task_gives_both_assignees_its_full_points(
+        self, client, auth, leader, alice, bob, make_task, flow
+    ):
+        task = make_task(created_at=BASE, points=13, assignee_1=alice, assignee_2=bob)
+        flow(task, [
+            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.approved, None, S.done, 3),
+            (EventType.closed, None, S.done, 3),
+        ])
+        window = {"range_start": BASE.isoformat(), "range_end": (BASE + timedelta(days=1)).isoformat()}
+        for user in (alice, bob):
+            report = client.get("/kpi/me", headers=auth(user), params=window).json()
+            assert report["volume"]["points_completed"] == 13, user.name
+
+        team = client.get("/kpi/team", headers=auth(leader), params=window).json()
+        # Counted once for the team, in full for each of them — same rule as
+        # the task counts.
+        assert team["volume"]["points_completed"] == 13
+        assert sum(p["volume"]["points_completed"] for p in team["programmers"]) == 26

@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from app.database import Base, SessionLocal, engine
 from app.events import log_event
-from app.models import EventType, Priority, Role, Task, TaskStatus, User
+from app.models import POINT_VALUES, EventType, Priority, Role, Task, TaskStatus, User
 from app.security import hash_password
 
 DEMO_PASSWORD = "password123"
@@ -101,6 +101,9 @@ def seed_tasks(db, leader: User, programmers: list[User], rng: random.Random) ->
         a2 = assignees[1] if dual else None
 
         priority = rng.choice(list(Priority))
+        # Skewed toward the middle of the scale: real backlogs hold a lot of
+        # 2s and 3s and only the occasional 13.
+        points = rng.choices(POINT_VALUES, weights=(12, 22, 26, 20, 13, 7))[0]
         # A third of the tasks get a deadline tight enough that some will slip,
         # so the on-time rate on the dashboard isn't a flat 100%.
         if rng.random() < 0.35:
@@ -112,6 +115,7 @@ def seed_tasks(db, leader: User, programmers: list[User], rng: random.Random) ->
             title=title,
             description=f"Seeded sample task #{index + 1}. Replace with real work.",
             priority=priority,
+            points=points,
             status=TaskStatus.to_do,
             due_date=due_date,
             created_by=leader.id,
@@ -165,10 +169,13 @@ def seed_tasks(db, leader: User, programmers: list[User], rng: random.Random) ->
         # Pick the work type: backend-only, frontend-only, or both.
         work = rng.choice(["front", "back", "both"]) if dual else rng.choice(["front", "back"])
         first = TaskStatus.in_progress_back if work in ("back", "both") else TaskStatus.in_progress_front
-        move(first, a1, (2, 40))
+        # Scale the in-progress stages with difficulty so the seeded
+        # hours-per-point figure is not uniform noise.
+        effort = max(1, points // 2)
+        move(first, a1, (2 * effort, 16 * effort))
 
         if work == "both":
-            move(TaskStatus.in_progress_front, a2 or a1, (4, 48))
+            move(TaskStatus.in_progress_front, a2 or a1, (2 * effort, 18 * effort))
 
         if progress < 0.4:
             task.status = current

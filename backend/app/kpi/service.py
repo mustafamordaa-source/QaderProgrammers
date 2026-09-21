@@ -6,6 +6,11 @@ Python rather than aggregated in SQL: for an internal team the row counts are
 small, and the per-task event walk (which needs ordering and look-ahead) stays
 readable and directly unit-testable.
 
+Difficulty weighting: every volume figure comes in two forms, a task count and
+a points total. Counting tasks alone treats a 13-point rewrite as equal to a
+1-point copy change; counting only points hides that someone shipped twelve
+things. Both are reported, with points leading in the UI.
+
 Attribution rule: a task's metrics are credited to its assignees, not to the
 actor of each event. A leader performs every `done` transition, so actor-based
 credit would hand the leader every completion; and a dual-assigned task is one
@@ -142,6 +147,13 @@ def compute_metrics(
     cycle_hours_by_week: dict[str, list[float]] = {}
     dwell_hours: dict[TaskStatus, list[float]] = {s: [] for s in TRACKED_STATUSES}
 
+    # Accumulated rather than averaged per task: hours-per-point is a rate, and
+    # the honest way to aggregate a rate is total over total. Averaging each
+    # task's own ratio would let a handful of 1-point tasks, where a few hours
+    # of latency dominates, swamp the figure.
+    completed_cycle_hours_total = 0.0
+    completed_points_total = 0
+
     submissions = 0
     rejections = 0
     approved_tasks = 0
@@ -151,6 +163,10 @@ def compute_metrics(
     per_week: Counter[str] = Counter()
     per_month: Counter[str] = Counter()
     open_by_status: Counter[str] = Counter()
+
+    points_per_week: Counter[str] = Counter()
+    points_per_month: Counter[str] = Counter()
+    open_points_by_status: Counter[str] = Counter()
 
     completed_with_due = 0
     on_time = 0
@@ -181,9 +197,13 @@ def compute_metrics(
             completed_total += 1
             per_week[_week_key(closed.timestamp)] += 1
             per_month[_month_key(closed.timestamp)] += 1
+            points_per_week[_week_key(closed.timestamp)] += task.points
+            points_per_month[_month_key(closed.timestamp)] += task.points
             cycle = _hours(closed.timestamp - task.created_at)
             cycle_hours.append(cycle)
             cycle_hours_by_week.setdefault(_week_key(closed.timestamp), []).append(cycle)
+            completed_cycle_hours_total += cycle
+            completed_points_total += task.points
 
             approved_tasks += 1
             if task_submissions == 1:
@@ -196,6 +216,7 @@ def compute_metrics(
 
         if task.status is not TaskStatus.done:
             open_by_status[task.status.value] += 1
+            open_points_by_status[task.status.value] += task.points
 
     speed = SpeedKpi(
         avg_cycle_time_hours=_mean(cycle_hours),
@@ -204,6 +225,11 @@ def compute_metrics(
         avg_cycle_time_per_week={
             week: _mean(values) for week, values in sorted(cycle_hours_by_week.items())
         },
+        hours_per_point=(
+            round(completed_cycle_hours_total / completed_points_total, 2)
+            if completed_points_total
+            else None
+        ),
     )
     quality = QualityKpi(
         review_submissions=submissions,
@@ -215,8 +241,24 @@ def compute_metrics(
         completed_total=completed_total,
         completed_per_week=dict(sorted(per_week.items())),
         completed_per_month=dict(sorted(per_month.items())),
-        open_by_status={s.value: open_by_status.get(s.value, 0) for s in TaskStatus if s is not TaskStatus.done},
+        open_by_status={
+            s.value: open_by_status.get(s.value, 0)
+            for s in TaskStatus
+            if s is not TaskStatus.done
+        },
         open_total=sum(open_by_status.values()),
+        points_completed=completed_points_total,
+        points_per_week=dict(sorted(points_per_week.items())),
+        points_per_month=dict(sorted(points_per_month.items())),
+        open_points_by_status={
+            s.value: open_points_by_status.get(s.value, 0)
+            for s in TaskStatus
+            if s is not TaskStatus.done
+        },
+        open_points_total=sum(open_points_by_status.values()),
+        avg_points_per_task=(
+            round(completed_points_total / completed_total, 2) if completed_total else None
+        ),
     )
     on_time_kpi = OnTimeKpi(
         completed_with_due_date=completed_with_due,

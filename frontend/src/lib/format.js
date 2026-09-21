@@ -49,6 +49,20 @@ export function formatHours(hours) {
   return `${(hours / 24).toFixed(1)}d`
 }
 
+/**
+ * Format several durations against one shared unit, chosen from the largest.
+ * Formatting each independently gives pairs like "2.3d" and "Median 43.0h" —
+ * the same scale in two units, which the reader has to convert to compare.
+ */
+export function formatHoursTogether(...values) {
+  const present = values.filter((value) => value !== null && value !== undefined)
+  const useDays = present.length > 0 && Math.max(...present) >= 48
+  return values.map((value) => {
+    if (value === null || value === undefined) return '—'
+    return useDays ? `${(value / 24).toFixed(1)}d` : `${value.toFixed(1)}h`
+  })
+}
+
 export function formatPercent(rate) {
   return rate === null || rate === undefined ? '—' : `${Math.round(rate * 100)}%`
 }

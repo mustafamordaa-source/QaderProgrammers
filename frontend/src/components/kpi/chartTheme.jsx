@@ -22,7 +22,7 @@ export function Tooltip({ active, payload, label, formatter }) {
       <p className="font-medium text-ink">{label}</p>
       {payload.map((entry) => (
         <p key={entry.dataKey} className="tabular mt-0.5 text-ink-secondary">
-          {formatter ? formatter(entry.value) : entry.value}
+          {formatter ? formatter(entry.value, entry.payload) : entry.value}
         </p>
       ))}
     </div>

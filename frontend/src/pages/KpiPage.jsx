@@ -10,17 +10,36 @@ import {
   ProgrammerComparison,
   TimeInStatusChart,
 } from '../components/kpi/Charts'
-import { formatDate, formatHours, formatPercent } from '../lib/format'
+import { formatDate, formatHours, formatHoursTogether, formatPercent } from '../lib/format'
 
 function Headline({ report }) {
   const { speed, quality, volume, on_time: onTime } = report
+  const [cycleAvg, cycleMedian] = formatHoursTogether(
+    speed.avg_cycle_time_hours,
+    speed.median_cycle_time_hours,
+  )
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {/* Volume leads on points: task counts alone rate every task the same. */}
+      <StatTile
+        label="Points completed"
+        value={volume.points_completed}
+        caption={
+          volume.completed_total > 0
+            ? `${volume.completed_total} task${volume.completed_total === 1 ? '' : 's'}, averaging ${volume.avg_points_per_task} points each`
+            : 'Nothing closed in this range'
+        }
+      />
       <StatTile
         label="Avg cycle time"
-        value={formatHours(speed.avg_cycle_time_hours)}
-        caption={`Median ${formatHours(speed.median_cycle_time_hours)} · ${volume.completed_total} completed in range`}
+        value={cycleAvg}
+        caption={`Median ${cycleMedian} · raw elapsed time, whatever the difficulty`}
+      />
+      <StatTile
+        label="Hours per point"
+        value={formatHours(speed.hours_per_point)}
+        caption="Total time over total points — comparable across easy and hard work"
       />
       <StatTile
         label="On-time rate"
@@ -52,7 +71,7 @@ export default function KpiPage() {
   const [report, setReport] = useState(null)
   const [focusedProgrammer, setFocusedProgrammer] = useState(null)
   const [focusedReport, setFocusedReport] = useState(null)
-  const [measure, setMeasure] = useState('completed')
+  const [measure, setMeasure] = useState('points')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -128,10 +147,12 @@ export default function KpiPage() {
         <DateRangeFilter activePreset={preset} onPreset={choosePreset} onCustom={chooseCustom} />
         <p className="mt-2 text-xs text-ink-muted">
           {formatDate(report.range_start)} – {formatDate(report.range_end)}
+          {' · '}Volume is difficulty-weighted: the leader rates each task 1–13 when
+          creating it.
           {isLeader && (
             <>
-              {' · '}A task shared by two programmers counts once for the team and in
-              full for each of them.
+              {' '}A task shared by two programmers counts once for the team and in full
+              for each of them.
             </>
           )}
         </p>
@@ -179,12 +200,17 @@ export default function KpiPage() {
       <Headline report={detail} />
 
       <div className="mt-3 grid gap-3 lg:grid-cols-2">
-        <CompletionsChart perWeek={detail.volume.completed_per_week} />
+        <CompletionsChart
+          perWeek={detail.volume.completed_per_week}
+          pointsPerWeek={detail.volume.points_per_week}
+        />
         <CycleTimeTrend perWeek={detail.speed.avg_cycle_time_per_week} />
         <TimeInStatusChart perStatus={detail.speed.avg_time_in_status_hours} />
         <OpenByStatus
           openByStatus={detail.volume.open_by_status}
+          openPointsByStatus={detail.volume.open_points_by_status}
           openTotal={detail.volume.open_total}
+          openPointsTotal={detail.volume.open_points_total}
         />
       </div>
 

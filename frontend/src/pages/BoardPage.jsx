@@ -60,6 +60,10 @@ export default function BoardPage() {
     applyUpdate(updated)
   }
 
+  async function handleReestimate(task, points) {
+    applyUpdate(await api.updateTask(task.id, { points }))
+  }
+
   async function handleCreate(payload) {
     const created = await api.createTask(payload)
     setTasks((current) => [created, ...current])
@@ -133,6 +137,7 @@ export default function BoardPage() {
           onClose={() => setSelected(null)}
           onMove={handleMove}
           onReject={handleReject}
+          onReestimate={handleReestimate}
         />
       )}
     </>
