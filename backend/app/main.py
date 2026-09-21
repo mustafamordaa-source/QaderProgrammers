@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.database import Base, engine
-from app.routers import auth, kpi, tasks
+from app.routers import auth, kpi, tasks, users
 
 # The schema is small and additive; create_all keeps local setup to one command.
 # Swap in Alembic if this ever needs real migrations.
@@ -30,6 +30,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(tasks.router)
+app.include_router(users.router)
 app.include_router(kpi.router)
 
 

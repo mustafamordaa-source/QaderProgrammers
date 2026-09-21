@@ -55,6 +55,11 @@ def _validate_assignees(db: Session, assignee_1_id: int | None, assignee_2_id: i
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"{field}: tasks can only be assigned to programmers",
             )
+        if not assignee.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field}: {assignee.name}'s account is deactivated",
+            )
 
 
 @router.post("", response_model=TaskDetailOut, status_code=status.HTTP_201_CREATED)

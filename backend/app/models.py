@@ -6,6 +6,7 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -66,6 +67,10 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[Role] = mapped_column(_str_enum(Role, "role"), nullable=False)
+    # Accounts are deactivated, never deleted: tasks and every row in the
+    # append-only event log reference users, so removing one would either fail
+    # on the foreign key or destroy the history the KPIs are computed from.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

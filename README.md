@@ -36,7 +36,7 @@ npm install
 npm run dev                        # http://127.0.0.1:5173
 ```
 
-The Vite dev server proxies `/auth`, `/tasks` and `/kpi` to the backend, so the
+The Vite dev server proxies `/auth`, `/tasks`, `/users` and `/kpi` to the backend, so the
 browser only ever talks to one origin and there is nothing to configure. For a
 production build pointed at another host, set `VITE_API_URL`.
 
@@ -58,11 +58,16 @@ numbers on first run. Re-running it is a no-op unless you pass `--reset`.
 
 ```bash
 cd backend
-.venv/bin/python -m pytest         # 86 tests
+.venv/bin/python -m pytest         # 122 tests
 ```
 
-They cover the transition matrix, the role guards, task visibility and the KPI
-arithmetic, each against a fresh in-memory database.
+They cover the transition matrix, the role guards, task visibility, user
+management and the KPI arithmetic, each against a fresh in-memory database.
+
+```bash
+cd frontend
+npm run check:routes               # client routes vs API paths (also runs on build)
+```
 
 ---
 
@@ -70,7 +75,8 @@ arithmetic, each against a fresh in-memory database.
 
 **Leader** creates tasks, sets priority, due date and assignees, and is the only
 role that can move a task to Done. Sees every task and every programmer's
-metrics, and can reassign or edit anything.
+metrics, can reassign or edit anything, and manages accounts (see
+[People](#people)).
 
 **Programmer** sees only tasks assigned to them. Can move their own work
 forward through the in-progress stages and into review. Cannot create, delete,
@@ -111,9 +117,37 @@ one can move it along. It is never split into subtasks. Every transition
 records which programmer made it, so the audit trail stays precise even though
 the task is shared.
 
+## People
+
+The leader's **People** screen creates accounts, edits names, emails and roles,
+resets passwords, and deactivates or reactivates people. Leaders can promote
+other leaders, so the role is handed over rather than being a fixed singleton.
+
+**Accounts are deactivated, never deleted.** `tasks` and `task_events` both
+carry non-nullable foreign keys into `users`, so a hard delete would either be
+refused by the database or take the audit log — and with it every KPI — along
+with the account. Deactivating sets `is_active = false`, which:
+
+- blocks login, and **revokes any token the person already holds** — the guard
+  is in `get_current_user`, so an open session stops working on its next
+  request rather than lasting until the token expires;
+- removes them from the assignment pickers, and rejects any attempt to assign
+  them new work;
+- leaves their existing tasks, event history and metrics untouched.
+
+Deactivating someone who still holds open tasks is allowed, but the dialog
+shows how many and warns that those tasks will sit in a queue nobody can act
+on. Reassign them from the board first if the work needs to continue.
+
+One rule is enforced server-side and cannot be clicked past: **a change may not
+leave the system with no active leader.** Demoting or deactivating the last
+active leader returns `409`, because there would be no way left to approve work
+or restore anyone's access. Handing over works fine — promote someone first,
+then demote yourself.
+
 ## Data model
 
-**users** — id, name, email, password_hash, role, created_at
+**users** — id, name, email, password_hash, role, is_active, created_at
 
 **tasks** — id, title, description, priority, status, due_date, created_by,
 assignee_1_id, assignee_2_id, created_at, updated_at
@@ -177,7 +211,12 @@ reassignment does not split one six-hour stay into two three-hour ones.
 ```
 POST   /auth/login                 email + password → JWT
 GET    /auth/me                    current user
-GET    /auth/users?role=           user directory (for the assignment UI)
+GET    /auth/users?role=           active-user directory (for the assignment UI)
+
+GET    /users                      leader only — everyone, with open-task counts
+POST   /users                      leader only — create an account
+PATCH  /users/{id}                 leader only — name, email, role, is_active
+POST   /users/{id}/password        leader only — reset a password
 
 POST   /tasks                      leader only — create and assign
 GET    /tasks                      leader: all · programmer: own queue only
@@ -224,9 +263,23 @@ frontend/
     api/client.js      fetch wrapper, token storage, error shaping
     auth/              AuthContext + route guard
     lib/               status constants, UTC → local formatting
-    components/        board (kanban, cards, modals) and kpi (charts, tiles)
-    pages/             Login, Board, KPI
+    components/        board (kanban, cards, modals), kpi (charts, tiles), users
+    pages/             Login, Board, KPI, Users
+  scripts/
+    check-routes.mjs   guards against client routes colliding with API paths
 ```
+
+### Client routes vs API paths
+
+The client routes are `/login`, `/board`, `/metrics` and `/people`. None of them
+may share a prefix with an API path (`/auth`, `/tasks`, `/users`, `/kpi`,
+`/health`), because the Vite dev proxy matches by prefix: a client route named
+after an API prefix gets handed to the backend on any hard page load — a
+refresh, a pasted link, a bookmark — while clicking through the app still works.
+That is why the metrics page is `/metrics` and not `/kpi`, and the people page
+is `/people` and not `/users`.
+
+`npm run check:routes` enforces this, and `npm run build` runs it first.
 
 ## Configuration
 
@@ -241,8 +294,11 @@ Backend settings come from the environment (or a `backend/.env` file):
 
 ## Notes for future work
 
-- The schema is created with `Base.metadata.create_all`. Add Alembic before the
-  first migration that is not purely additive.
+- The schema is created with `Base.metadata.create_all`, which adds new tables
+  but **not new columns to existing ones**. An existing `taskflow.db` from
+  before `users.is_active` was added will fail on startup; re-run
+  `python seed.py --reset`. This is the point at which Alembic stops being
+  optional — the next schema change that has to preserve real data needs it.
 - Tokens are stored in `localStorage`, which is appropriate for an internal tool
   but is not XSS-proof. Move to an httpOnly cookie if this is ever exposed more
   widely.

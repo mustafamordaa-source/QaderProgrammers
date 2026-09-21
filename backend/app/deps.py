@@ -37,6 +37,13 @@ def get_current_user(
     user = db.get(User, user_id)
     if user is None:
         raise CREDENTIALS_ERROR
+    if not user.is_active:
+        # Deactivating someone must revoke the token they already hold, not just
+        # stop them logging in again.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been deactivated",
+        )
     return user
 
 
