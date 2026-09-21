@@ -37,6 +37,7 @@ def build_users(db) -> tuple[User, list[User]]:
         email=LEADER["email"],
         password_hash=hash_password(DEMO_PASSWORD),
         role=Role.leader,
+        is_active=True,
     )
     db.add(leader)
 

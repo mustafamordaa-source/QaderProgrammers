@@ -16,9 +16,13 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: DbSession) -> TokenResponse:
     user = db.scalar(select(User).where(User.email == payload.email.lower()))
-    # Same response for unknown email and wrong password, so the endpoint
-    # doesn't confirm which accounts exist.
-    if user is None or not verify_password(payload.password, user.password_hash):
+    # Same response for unknown email, wrong password and deactivated account,
+    # so the endpoint doesn't confirm which accounts exist or which are live.
+    if (
+        user is None
+        or not user.is_active
+        or not verify_password(payload.password, user.password_hash)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -41,7 +45,9 @@ def list_users(user: CurrentUser, db: DbSession, role: Role | None = None) -> li
     Programmers get the list too (names are shown on shared tasks), but it is
     read-only and carries no sensitive fields.
     """
-    stmt = select(User).order_by(User.name)
+    # Deactivated people are left out: this feeds the assignment pickers, and
+    # nobody should be given new work. Leaders see everyone via GET /users.
+    stmt = select(User).where(User.is_active.is_(True)).order_by(User.name)
     if role is not None:
         stmt = stmt.where(User.role == role)
     return list(db.scalars(stmt))

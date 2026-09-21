@@ -32,7 +32,56 @@ class UserOut(ORMModel):
     name: str
     email: EmailStr
     role: Role
+    is_active: bool
     created_at: datetime
+
+
+# --- user management (leader only) ------------------------------------------
+
+MIN_PASSWORD_LENGTH = 8
+
+
+class UserAdminOut(UserOut):
+    """A user row for the management screen, with the context the leader needs
+    before deactivating somebody."""
+
+    open_task_count: int = 0
+
+
+class UserCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: EmailStr
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=128)
+    role: Role = Role.programmer
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be blank")
+        return v
+
+
+class UserUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    email: EmailStr | None = None
+    role: Role | None = None
+    is_active: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be blank")
+        return v
+
+
+class PasswordReset(BaseModel):
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=128)
 
 
 # --- tasks ------------------------------------------------------------------

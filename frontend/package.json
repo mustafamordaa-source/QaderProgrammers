@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/check-routes.mjs && vite build",
     "preview": "vite preview",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "check:routes": "node scripts/check-routes.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

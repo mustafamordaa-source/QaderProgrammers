@@ -23,9 +23,14 @@ export default function AppShell() {
             <NavLink to="/board" className={navClass}>
               Board
             </NavLink>
-            <NavLink to="/kpi" className={navClass}>
+            <NavLink to="/metrics" className={navClass}>
               {isLeader ? 'Team KPIs' : 'My KPIs'}
             </NavLink>
+            {isLeader && (
+              <NavLink to="/people" className={navClass}>
+                People
+              </NavLink>
+            )}
           </nav>
 
           <div className="ml-auto flex items-center gap-3">

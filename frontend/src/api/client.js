@@ -96,6 +96,13 @@ export const api = {
       body: { to_status: toStatus, comment },
     }),
 
+  // Leader-only user management.
+  adminUsers: () => request('/users'),
+  createUser: (payload) => request('/users', { method: 'POST', body: payload }),
+  updateUser: (id, payload) => request(`/users/${id}`, { method: 'PATCH', body: payload }),
+  resetPassword: (id, password) =>
+    request(`/users/${id}/password`, { method: 'POST', body: { password } }),
+
   teamKpi: (range) => request('/kpi/team', { params: range }),
   myKpi: (range) => request('/kpi/me', { params: range }),
   programmerKpi: (id, range) => request(`/kpi/programmer/${id}`, { params: range }),
