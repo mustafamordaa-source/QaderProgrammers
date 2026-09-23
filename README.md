@@ -341,8 +341,10 @@ Backend settings come from the environment (or a `backend/.env` file):
 A push to `main` deploys to `https://tasks.qader.vip`. GitHub Actions
 (`.github/workflows/deploy.yml`) runs the backend tests on `ubuntu-latest`,
 then a self-hosted runner on the Qader staging server (label `taskflow`) runs
-`docker compose up -d --build`. A failing test blocks the deploy. You can also
-start the workflow by hand from the Actions tab.
+`scripts/deploy.sh`. The script rebuilds the containers, waits for
+`/api/health`, and prints the container logs if the API never answers. A
+failing test blocks the deploy. You can also start the workflow by hand from
+the Actions tab, or run `./scripts/deploy.sh` from the repo root on the server.
 
 ### How the pieces connect
 
@@ -363,13 +365,8 @@ start the workflow by hand from the Actions tab.
 
 ### Server state
 
-- Secrets live in `/opt/docker/taskflow/.env` on the server, never in the repo:
-  ```env
-  SECRET_KEY=<long random string>
-  DATABASE_URL=sqlite:////data/taskflow.db
-  ACCESS_TOKEN_EXPIRE_MINUTES=480
-  CORS_ORIGINS=["https://tasks.qader.vip"]
-  ```
+- Secrets live in `/opt/docker/taskflow/.env` on the server, never in the repo.
+  Copy `.env.example` there, set a real `SECRET_KEY`, and `chmod 600` it.
 - The database lives in the Docker volume `taskflow_taskflow_data`, at
   `/data/taskflow.db` inside `taskflow_api`. Deploys keep it.
 - Seed the first leader account once, after the first deploy:

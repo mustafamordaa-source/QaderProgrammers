@@ -32,19 +32,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and start
-        run: docker compose up -d --build --remove-orphans
-
-      - name: Health check
-        run: |
-          for i in $(seq 1 20); do
-            if docker exec taskflow_web wget -qO- http://127.0.0.1/api/health; then
-              exit 0
-            fi
-            sleep 3
-          done
-          docker compose logs --tail 50 api web
-          exit 1
-
-      - name: Prune dangling images
-        run: docker image prune -f
+      - name: Build, start and health-check
+        run: bash scripts/deploy.sh
