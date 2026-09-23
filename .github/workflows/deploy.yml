@@ -1,0 +1,50 @@
+name: Deploy TaskFlow to staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: taskflow-deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: pytest
+
+  deploy:
+    needs: test
+    # Self-hosted runner on the Qader staging server, registered with the label "taskflow".
+    runs-on: [self-hosted, taskflow]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start
+        run: docker compose up -d --build --remove-orphans
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 20); do
+            if docker exec taskflow_web wget -qO- http://127.0.0.1/api/health; then
+              exit 0
+            fi
+            sleep 3
+          done
+          docker compose logs --tail 50 api web
+          exit 1
+
+      - name: Prune dangling images
+        run: docker image prune -f
