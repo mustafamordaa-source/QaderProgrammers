@@ -336,6 +336,73 @@ Backend settings come from the environment (or a `backend/.env` file):
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `480` | |
 | `CORS_ORIGINS` | Vite's dev origins | |
 
+## Deployment
+
+A push to `main` deploys to `https://tasks.qader.vip`. GitHub Actions
+(`.github/workflows/deploy.yml`) runs the backend tests on `ubuntu-latest`,
+then a self-hosted runner on the Qader staging server (label `taskflow`) runs
+`scripts/deploy.sh`. The script rebuilds the containers, waits for
+`/api/health`, and prints the container logs if the API never answers. A
+failing test blocks the deploy. You can also start the workflow by hand from
+the Actions tab, or run `./scripts/deploy.sh` from the repo root on the server.
+
+### How the pieces connect
+
+- `docker-compose.yml` runs two containers under the project name `taskflow`:
+  `taskflow_api` (uvicorn, one worker) and `taskflow_web` (nginx serving the
+  Vite build).
+- Both join the external Docker network `qader_qader_network`. The Qader nginx
+  container owns ports 80 and 443, terminates TLS, and forwards every request
+  for `tasks.qader.vip` to `taskflow_web:80`. Neither TaskFlow container
+  publishes a host port.
+- The frontend is built with `VITE_API_URL=/api`. `taskflow_web` strips `/api`
+  and forwards the rest to FastAPI, so the backend routes keep their plain
+  paths. The API docs live at `/api/docs`.
+- Keep uvicorn at one worker. Several workers writing to one SQLite file cause
+  `database is locked` errors.
+- Keep the project name, both container names and the network name as they
+  are. The Qader nginx config addresses `taskflow_web` by name.
+
+### Server state
+
+- Secrets live in `/opt/docker/taskflow/.env` on the server, never in the repo.
+  Copy `.env.example` there, set a real `SECRET_KEY`, and `chmod 600` it.
+- The database lives in the Docker volume `taskflow_taskflow_data`, at
+  `/data/taskflow.db` inside `taskflow_api`. Deploys keep it.
+- Seed the first leader account once, after the first deploy:
+  ```sh
+  docker exec -it taskflow_api python seed.py --password '<strong password>'
+  ```
+  **Never run `seed.py --reset` on staging.** It wipes the data.
+
+### Schema changes
+
+The app builds tables with `Base.metadata.create_all`, which never adds a
+column to an existing table. If your change adds or renames a column, run a
+manual `ALTER TABLE` against `/data/taskflow.db` on the server before or right
+after the deploy, and say so in the commit message. For example:
+
+```sh
+docker exec taskflow_api python -c "import sqlite3; c=sqlite3.connect('/data/taskflow.db'); c.execute('ALTER TABLE tasks ADD COLUMN example INTEGER NOT NULL DEFAULT 0'); c.commit()"
+```
+
+### Running the containers locally
+
+The compose file reads its env file from `TASKFLOW_ENV_FILE`, falling back to
+the server path. To try the production build on your machine:
+
+```sh
+docker network create qader_qader_network
+printf 'SECRET_KEY=local-test\nDATABASE_URL=sqlite:////data/taskflow.db\n' > /tmp/taskflow.env
+TASKFLOW_ENV_FILE=/tmp/taskflow.env docker compose up -d --build
+docker exec taskflow_web wget -qO- http://127.0.0.1/api/health   # {"status":"ok"}
+docker exec taskflow_api python seed.py --password test1234
+```
+
+To click through the UI, add `ports: ["8080:80"]` to `web` for the test only
+and open `http://localhost:8080`. Remove the port before you commit. Clean up
+with `docker compose down -v && docker network rm qader_qader_network`.
+
 ## Notes for future work
 
 - The schema is created with `Base.metadata.create_all`, which adds new tables

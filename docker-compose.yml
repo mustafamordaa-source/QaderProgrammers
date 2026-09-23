@@ -1,0 +1,30 @@
+name: taskflow
+
+# Staging setup for tasks.qader.vip. The Qader nginx container (qader_nginx)
+# proxies to taskflow_web by name over qader_qader_network, so keep the project
+# name, both container names and the network name as they are.
+services:
+  api:
+    build: ./backend
+    container_name: taskflow_api
+    # The server keeps the real secrets here. Set TASKFLOW_ENV_FILE for a local test.
+    env_file: ${TASKFLOW_ENV_FILE:-/opt/docker/taskflow/.env}
+    volumes:
+      - taskflow_data:/data
+    restart: unless-stopped
+    networks: [qader]
+
+  web:
+    build: ./frontend
+    container_name: taskflow_web
+    depends_on: [api]
+    restart: unless-stopped
+    networks: [qader]
+
+volumes:
+  taskflow_data:
+
+networks:
+  qader:
+    external: true
+    name: qader_qader_network
