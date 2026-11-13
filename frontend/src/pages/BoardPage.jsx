@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api, isVersionConflict } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import KanbanBoard from '../components/board/KanbanBoard'
 import CreateTaskModal from '../components/board/CreateTaskModal'
 import TaskDetailModal from '../components/board/TaskDetailModal'
 import TriageBar from '../components/board/TriageBar'
-import { KIND_LABELS, SIDES, SIDE_LABELS, TASK_KINDS, assignablePeople } from '../lib/constants'
-
-const controlClass =
-  'rounded-lg border border-hairline bg-surface-raised px-3 py-1.5 text-sm outline-none focus:border-series1'
+import BoardFilters from '../components/board/BoardFilters'
+import BoardSkeleton from '../components/board/BoardSkeleton'
+import { useBoardPrefs, useFillHeight, useMediaQuery } from '../components/board/useBoardPrefs'
+import { assignablePeople } from '../lib/constants'
 
 /** Wait until the value stops changing, so typing does not fire a request per key. */
 function useDebounced(value, delay = 300) {
@@ -30,6 +30,8 @@ export default function BoardPage() {
   const [selectedNotice, setSelectedNotice] = useState(null)
   const [creating, setCreating] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [claimingId, setClaimingId] = useState(null)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
   // `/board?task=ID` opens that task, so links in notification emails land on it.
@@ -54,6 +56,7 @@ export default function BoardPage() {
 
   const load = useCallback(async () => {
     const id = ++requestId.current
+    setRefreshing(true)
     try {
       const list = await api.tasks({
         mine: mine || undefined,
@@ -71,7 +74,10 @@ export default function BoardPage() {
     } catch (err) {
       if (id === requestId.current) setError(err.message)
     } finally {
-      if (id === requestId.current) setLoading(false)
+      if (id === requestId.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [mine, side, tag, q, kind, openParts, fromAgents])
 
@@ -177,11 +183,32 @@ export default function BoardPage() {
       applyUpdate(await api.changeStatus(task.id, { status, expectedVersion: task.version }))
     } catch (err) {
       if (isVersionConflict(err)) {
+        // Reload first: a successful load clears errors, and this one must stay.
+        await load()
         setError('Someone changed this task while you were looking. The board has been reloaded; try again.')
-        load()
       } else {
         setError(err.message)
       }
+    }
+  }
+
+  // The card's quick Claim: a claim with no branch, like the detail panel's.
+  async function handleClaim(task) {
+    setNotice(null)
+    setClaimingId(task.id)
+    try {
+      const result = await api.claim(task.id, { branch: null })
+      applyUpdate(result)
+      setNotice(
+        result?.warnings?.length
+          ? `Claimed #${task.id}, with warnings: ${result.warnings.join(' ')}`
+          : `You hold the claim on #${task.id} now.`,
+      )
+    } catch (err) {
+      if (isVersionConflict(err)) await load()
+      setError(err.message)
+    } finally {
+      setClaimingId(null)
     }
   }
 
@@ -236,14 +263,34 @@ export default function BoardPage() {
   }
 
   const filtered = mine || side || tag || q || kind || openParts || fromAgents
+  const activeCount = [mine, side, tagInput.trim(), search.trim(), kind, openParts, fromAgents].filter(Boolean).length
   const programmers = assignablePeople(people)
 
+  const prefs = useBoardPrefs()
+  const isMobile = useMediaQuery('(max-width: 767px)')
+  // The board area reaches the bottom of the window, so its sideways scrollbar
+  // is always on screen instead of below the tallest column.
+  const boardRef = useRef(null)
+  const boardHeight = useFillHeight(boardRef)
+
+  function clearFilters() {
+    setMine(false)
+    setSide('')
+    setTagInput('')
+    setSearch('')
+    setKind('')
+    setOpenParts(false)
+    setFromAgents(false)
+  }
+
+  const dismiss = 'ms-auto shrink-0 rounded px-1 text-xs opacity-70 hover:opacity-100'
+
   return (
-    <>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div>
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-xl font-semibold tracking-tight">Team board</h1>
-          <p className="mt-0.5 text-sm text-ink-secondary">
+          <p className="mt-0.5 hidden text-sm text-ink-secondary sm:block">
             {isLead
               ? 'Every task across the team. Leads triage, approve and drop work.'
               : isReadOnly
@@ -263,145 +310,86 @@ export default function BoardPage() {
         )}
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2" role="search">
-        <label className="inline-flex items-center gap-2 rounded-lg border border-hairline px-3 py-1.5 text-sm">
-          <input type="checkbox" checked={mine} onChange={(event) => setMine(event.target.checked)} />
-          Mine
-        </label>
-        <select
-          aria-label="Side"
-          value={side}
-          onChange={(event) => setSide(event.target.value)}
-          className={controlClass}
-        >
-          <option value="">All sides</option>
-          {SIDES.map((value) => (
-            <option key={value} value={value}>
-              {SIDE_LABELS[value]}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="Kind"
-          value={kind}
-          onChange={(event) => setKind(event.target.value)}
-          className={`${controlClass} ${kind ? 'border-series1 text-series1' : ''}`}
-        >
-          <option value="">All kinds</option>
-          {TASK_KINDS.map((value) => (
-            <option key={value} value={value}>
-              {KIND_LABELS[value]}
-            </option>
-          ))}
-        </select>
-        <input
-          aria-label="Tag"
-          placeholder="Tag"
-          dir="auto"
-          value={tagInput}
-          onChange={(event) => setTagInput(event.target.value)}
-          className={`${controlClass} w-36`}
-        />
-        <input
-          type="search"
-          aria-label="Search title, description and summary"
-          placeholder="Search…"
-          dir="auto"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          className={`${controlClass} w-56`}
-        />
-        {isLead && (
-          <button
-            type="button"
-            aria-pressed={fromAgents}
-            onClick={() => setFromAgents((v) => !v)}
-            title="Only tasks an agent filed, for triage"
-            className={`rounded-full border px-3 py-1 text-sm transition ${
-              fromAgents
-                ? 'border-series2 bg-series2/5 text-series2'
-                : 'border-hairline text-ink-secondary hover:text-ink'
-            }`}
-          >
-            From agents
-          </button>
-        )}
-        {mySides.length > 0 && !isReadOnly && (
-          <button
-            type="button"
-            aria-pressed={openParts}
-            onClick={() => setOpenParts((v) => !v)}
-            title={`Pool tasks in To do on your sides: ${mySides.map((s) => SIDE_LABELS[s] ?? s).join(', ')}`}
-            className={`rounded-full border px-3 py-1 text-sm transition ${
-              openParts
-                ? 'border-series1 bg-series1/5 text-series1'
-                : 'border-hairline text-ink-secondary hover:text-ink'
-            }`}
-          >
-            Open parts for my sides
-          </button>
-        )}
-        {filtered && (
-          <button
-            type="button"
-            onClick={() => {
-              setMine(false)
-              setSide('')
-              setTagInput('')
-              setSearch('')
-              setKind('')
-              setOpenParts(false)
-              setFromAgents(false)
-            }}
-            className="text-xs text-ink-secondary underline-offset-2 hover:text-ink hover:underline"
-          >
-            Clear filters
-          </button>
-        )}
-      </div>
+      <BoardFilters
+        values={{ search, mine, side, tagInput, kind, fromAgents, openParts }}
+        set={{ search: setSearch, mine: setMine, side: setSide, tagInput: setTagInput, kind: setKind, fromAgents: setFromAgents, openParts: setOpenParts }}
+        onClear={clearFilters}
+        activeCount={activeCount}
+        resultCount={tasks.length}
+        refreshing={refreshing && !loading}
+        isLead={isLead}
+        isReadOnly={isReadOnly}
+        mySides={mySides}
+        groupBy={prefs.groupBy}
+        onGroupBy={prefs.setGroupBy}
+        density={prefs.density}
+        onDensity={prefs.setDensity}
+      />
 
       {error && (
-        <p role="alert" className="mb-4 rounded-lg border border-critical/40 px-3 py-2 text-sm text-critical">
-          {error}
+        <p role="alert" dir="auto" className="flex items-start gap-2 rounded-lg border border-critical/40 px-3 py-2 text-sm text-critical">
+          <span>{error}</span>
+          <button type="button" onClick={() => setError(null)} aria-label="Dismiss message" className={dismiss}>
+            ✕
+          </button>
         </p>
       )}
       {notice && (
-        <p role="status" className="mb-4 rounded-lg border border-good/40 px-3 py-2 text-sm text-good">
-          {notice}
+        <p role="status" dir="auto" className="flex items-start gap-2 rounded-lg border border-good/40 px-3 py-2 text-sm text-good">
+          <span>{notice}</span>
+          <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss message" className={dismiss}>
+            ✕
+          </button>
         </p>
       )}
 
-      {loading ? (
-        <p className="text-sm text-ink-muted">Loading board…</p>
-      ) : tasks.length === 0 && !filtered ? (
-        <div className="rounded-xl border border-dashed border-hairline px-6 py-12 text-center">
-          <p className="text-sm font-medium">No tasks yet.</p>
-          <p className="mt-1 text-sm text-ink-muted">
-            {isReadOnly ? 'Work will show up here once the team adds it.' : 'Create the first one to get the board moving.'}
-          </p>
-        </div>
-      ) : (
-        <>
-          {isLead && (
-            <TriageBar
-              tasks={tasks}
-              selectedIds={picked}
-              programmers={programmers}
-              onClear={() => setPicked(new Set())}
-              onDone={handleTriaged}
-            />
-          )}
+      {isLead && !loading && (
+        <TriageBar
+          tasks={tasks}
+          selectedIds={picked}
+          programmers={programmers}
+          onClear={() => setPicked(new Set())}
+          onDone={handleTriaged}
+        />
+      )}
+
+      <div
+        ref={boardRef}
+        style={boardHeight ? { height: boardHeight } : undefined}
+        className={`min-h-0 ${boardHeight ? '' : 'h-[calc(100dvh-14rem)]'}`}
+      >
+        {loading ? (
+          <BoardSkeleton columns={isMobile ? 1 : 6} />
+        ) : tasks.length === 0 && !filtered ? (
+          <div className="rounded-xl border border-dashed border-hairline px-6 py-12 text-center">
+            <p className="text-sm font-medium">No tasks yet.</p>
+            <p className="mt-1 text-sm text-ink-muted">
+              {isReadOnly ? 'Work will show up here once the team adds it.' : 'Create the first one to get the board moving.'}
+            </p>
+            <Link to="/guide" className="mt-3 inline-block text-sm text-series1 hover:underline">
+              New here? Read the guide.
+            </Link>
+          </div>
+        ) : (
           <KanbanBoard
             tasks={tasks}
             user={user}
+            filtered={Boolean(filtered)}
+            density={prefs.density}
+            groupBy={prefs.groupBy}
+            collapsed={prefs.collapsed}
+            onToggleCollapse={prefs.toggleCollapsed}
+            isMobile={isMobile}
             onOpenTask={openTask}
             onMove={handleMove}
+            onClaim={isReadOnly ? null : handleClaim}
+            claimingId={claimingId}
             selectedIds={picked}
             onSelect={isLead ? selectOne : null}
             onSelectMany={isLead ? selectMany : null}
           />
-        </>
-      )}
+        )}
+      </div>
 
       {creating && (
         <CreateTaskModal
@@ -425,6 +413,6 @@ export default function BoardPage() {
           initialNotice={selectedNotice}
         />
       )}
-    </>
+    </div>
   )
 }

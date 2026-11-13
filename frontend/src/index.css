@@ -20,6 +20,7 @@
   --border: rgba(11, 11, 11, 0.1);
   --grid: #e1e0d9;
   --baseline: #c3c2b7;
+  --scroll-thumb: #b5b4a9;
 
   --series-1: #2a78d6;
   --series-2: #eb6834;
@@ -46,6 +47,7 @@
     --border: rgba(255, 255, 255, 0.12);
     --grid: #2c2c2a;
     --baseline: #383835;
+    --scroll-thumb: #5a5954;
 
     --series-1: #3987e5;
     --series-2: #d95926;
@@ -67,6 +69,7 @@
   --border: rgba(255, 255, 255, 0.12);
   --grid: #2c2c2a;
   --baseline: #383835;
+  --scroll-thumb: #5a5954;
 
   --series-1: #3987e5;
   --series-2: #d95926;
@@ -90,4 +93,54 @@ body {
 :focus-visible {
   outline: 2px solid var(--series-1);
   outline-offset: 2px;
+}
+
+/* Board scroll areas: visible, thin, themed scrollbars. Chromium and Safari use
+   the ::-webkit-scrollbar rules (a 10px bar stays easy to grab on Windows);
+   Firefox, which lacks them, gets the standard properties instead. */
+.board-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.board-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.board-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--scroll-thumb);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.board-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-muted);
+}
+
+.board-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .board-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scroll-thumb) transparent;
+  }
+}
+
+/* The board's sideways bar gets a faint track so it reads as a control. */
+.board-scroll[role='region']::-webkit-scrollbar {
+  height: 12px;
+}
+
+.board-scroll[role='region']::-webkit-scrollbar-track {
+  background-color: var(--surface-2);
+  border-radius: 999px;
+}
+
+/* Drag-to-scroll in progress: grabbing cursor, no text selection. */
+.board-scroll[data-dragging='true'] {
+  cursor: grabbing;
+  user-select: none;
 }

@@ -61,7 +61,7 @@ export default function TriageBar({ tasks, selectedIds, programmers, onClear, on
   return (
     <section
       aria-label="Bulk triage"
-      className="mb-4 rounded-xl border border-series1/40 bg-surface p-3"
+      className="rounded-xl border border-series1/40 bg-surface p-3"
     >
       {ids.length > 0 && (
         <>
