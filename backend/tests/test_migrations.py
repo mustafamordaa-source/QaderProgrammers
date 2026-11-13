@@ -48,9 +48,9 @@ def old_db(tmp_path):
 
 
 def test_old_database_is_stamped_then_upgraded(old_db):
-    assert migrate.upgrade(old_db) == "0004"
+    assert migrate.upgrade(old_db) == "0005"
     # Running it again is a no-op.
-    assert migrate.upgrade(old_db) == "0004"
+    assert migrate.upgrade(old_db) == "0005"
 
 
 def test_live_tasks_move_to_in_progress_with_a_side(old_db):
@@ -93,7 +93,7 @@ def test_migrated_schema_matches_the_models(old_db, tmp_path):
 
 def test_fresh_database_builds_from_scratch(tmp_path):
     url = f"sqlite:///{(tmp_path / 'fresh.db').as_posix()}"
-    assert migrate.upgrade(url) == "0004"
+    assert migrate.upgrade(url) == "0005"
 
 
 def test_old_leaders_become_admin_and_lead(old_db):

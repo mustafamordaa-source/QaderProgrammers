@@ -127,6 +127,26 @@ POINT_VALUES: tuple[int, ...] = (1, 2, 3, 5, 8, 13)
 DEFAULT_POINTS = 3
 
 
+class TaskKind(str, enum.Enum):
+    """What sort of work a task is. Each kind has a template (see templates.py)."""
+
+    task = "task"
+    bug = "bug"
+    feature = "feature"
+    chore = "chore"
+    content = "content"
+    docs = "docs"
+    research = "research"
+
+
+class LinkKind(str, enum.Enum):
+    # from_task blocks to_task: to_task cannot be claimed while from_task is open.
+    blocks = "blocks"
+    relates = "relates"
+    # from_task duplicates to_task (the one to keep).
+    duplicates = "duplicates"
+
+
 class TaskStatus(str, enum.Enum):
     # Filed by a machine (or a member's agent) and waiting for the leader.
     proposed = "proposed"
@@ -202,6 +222,9 @@ class EventType(str, enum.Enum):
     git_linked = "git_linked"
     deployed = "deployed"
     dropped = "dropped"
+    linked = "linked"
+    unlinked = "unlinked"
+    seen_again = "seen_again"
     triaged = "triaged"
     doc_saved = "doc_saved"
     file_added = "file_added"
@@ -359,6 +382,14 @@ class Task(Base):
     deploy_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     deployed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     drop_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    kind: Mapped[TaskKind] = mapped_column(
+        _str_enum(TaskKind, "task_kind"), default=TaskKind.task, nullable=False
+    )
+    # Subtasks: two levels only (a parent cannot itself have a parent).
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True, index=True)
+    # Same fingerprint, same problem: creating it again while one is open adds
+    # a note to the open task instead (used by scanners).
+    fingerprint: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
 
     creator: Mapped[User] = relationship(foreign_keys=[created_by], lazy="joined")
     assignee_1: Mapped[User | None] = relationship(foreign_keys=[assignee_1_id], lazy="joined")
@@ -385,6 +416,26 @@ class Task(Base):
     context: Mapped[list[ContextLink]] = relationship(
         back_populates="task", order_by="ContextLink.id", cascade="all, delete-orphan"
     )
+    parent: Mapped[Task | None] = relationship(
+        remote_side="Task.id", foreign_keys=[parent_id], back_populates="children"
+    )
+    children: Mapped[list[Task]] = relationship(
+        foreign_keys=[parent_id], back_populates="parent", order_by="Task.id"
+    )
+    incoming_links: Mapped[list[TaskLink]] = relationship(
+        foreign_keys="TaskLink.to_task_id", viewonly=True, order_by="TaskLink.id"
+    )
+    outgoing_links: Mapped[list[TaskLink]] = relationship(
+        foreign_keys="TaskLink.from_task_id", viewonly=True, order_by="TaskLink.id"
+    )
+
+    def open_blockers(self) -> list[int]:
+        """Ids of open tasks that block this one."""
+        return [
+            link.from_task_id
+            for link in self.incoming_links
+            if link.kind is LinkKind.blocks and link.from_task.status not in CLOSED_STATUSES
+        ]
 
     __table_args__ = (
         # The same person must not occupy both assignee slots.
@@ -543,6 +594,9 @@ class GitLink(Base):
     title: Mapped[str | None] = mapped_column(String(300), nullable=True)
     # open, merged, closed (PRs and branches).
     state: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # PRs: the branch it merges into, and when it merged (from the webhook).
+    base_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    merged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     actor_kind: Mapped[ActorKind] = mapped_column(
         _str_enum(ActorKind, "git_actor_kind"), default=ActorKind.human, nullable=False
     )
@@ -731,3 +785,25 @@ class Notification(Base):
     user: Mapped[User] = relationship(foreign_keys=[user_id], lazy="joined")
     actor: Mapped[User | None] = relationship(foreign_keys=[actor_id], lazy="joined")
     task: Mapped[Task] = relationship(lazy="joined")
+
+
+class TaskLink(Base):
+    __tablename__ = "task_links"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    from_task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
+    to_task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
+    kind: Mapped[LinkKind] = mapped_column(_str_enum(LinkKind, "link_kind"), nullable=False)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    actor_kind: Mapped[ActorKind] = mapped_column(
+        _str_enum(ActorKind, "link_actor_kind"), default=ActorKind.human, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+    from_task: Mapped[Task] = relationship(foreign_keys=[from_task_id], lazy="joined")
+    to_task: Mapped[Task] = relationship(foreign_keys=[to_task_id], lazy="joined")
+
+    __table_args__ = (
+        UniqueConstraint("from_task_id", "to_task_id", "kind", name="uq_task_links"),
+        CheckConstraint("from_task_id != to_task_id", name="ck_task_links_not_self"),
+    )

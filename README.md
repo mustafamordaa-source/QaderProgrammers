@@ -158,6 +158,48 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   page you can see, searchable, with shared repo files listed once. Agents
   read it before writing a new plan.
 
+## Task kinds, links and subtasks
+
+- **Kinds**: task, bug, feature, chore, content, docs, research. Each kind has
+  a template (`GET /tasks/templates`): a description skeleton, headings that
+  must have text (a bug needs `Steps:`, `Expected:`, `Actual:`; a feature
+  needs `Goal:` and `Scope:`) and starter acceptance criteria, used when the
+  task brings none.
+- **Links**: `blocks`, `relates`, `duplicates`. An open blocker keeps a task
+  out of `?ready=true`, refuses its claim and its move to in_progress. Loops
+  are refused.
+- **Subtasks**: `parent_id`, two levels only. A parent cannot reach done while
+  a subtask is open. Split a shared frontend and backend task into one
+  subtask per side, so each agent holds its own claim.
+- **Fingerprints**: a creator (usually a scanner) may send a `fingerprint`
+  such as `rule:path:symbol`. While a task with that fingerprint is open, a
+  new one is not created: the open task gets a `seen_again` event and comes
+  back with `duplicate_of_existing: true`. A task dropped with that
+  fingerprint in the last 90 days refuses it.
+
+## GitHub webhook
+
+Set `GITHUB_WEBHOOK_SECRET` and `GITHUB_REPOS` on the server, then a repo
+admin adds a webhook pointing at `https://tasks.qader.vip/api/github/webhook`
+with the same secret (`.env.example` has the steps). It costs no Actions
+minutes: GitHub calls the hub.
+
+- Put the hub ID in the branch name: `feat/HUB-12-ready-accounts`. The PR
+  title also counts; the PR body does not, and PRs from people outside the
+  repo are ignored.
+- **push**: links the branch and its commits (up to 20 per push) to the task.
+- **pull_request**: links the PR with its state, base branch and merge time.
+  When it merges and the task is in progress with every criterion closed,
+  the task moves to in_review and leads are notified. Only a lead moves a
+  task to done.
+- **workflow_run**: a successful run on a branch in `GITHUB_DEPLOY_RULES`
+  (`develop=staging,main=production`) moves the deploy state forward on
+  every task whose PR merged into that branch before the run started; for
+  production, into any branch in the rules. It never moves back.
+
+Changes made this way show as the `github` account with actor kind
+`system`.
+
 ## Notifications and email
 
 The hub tells a person when they are assigned, asked a question, answered,
@@ -402,6 +444,9 @@ GET    /notifications               yours (?unread); /count; POST /read {ids | a
 GET    /notifications/preferences   your email settings; PATCH to change (browser only)
 POST   /notifications/test          send yourself a test email
 GET    /notifications/status        admin: is email on, pending, failed, last error
+GET    /tasks/templates             skeleton, required headings, criteria per kind
+POST   /tasks/{id}/links            {kind: blocks|relates|duplicates, to_task_id}; DELETE /links/{lid}
+POST   /github/webhook              GitHub only (signed)
 
 GET    /kpi/team   /kpi/me   /kpi/programmer/{id}
 GET    /health

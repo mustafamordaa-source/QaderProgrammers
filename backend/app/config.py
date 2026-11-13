@@ -80,6 +80,17 @@ class Settings(BaseSettings):
     # "auto": run the sender when SMTP is set; "off": never (tests, scripts).
     email_sender: str = "auto"
 
+    # --- GitHub webhook -----------------------------------------------------
+    # The webhook answers 404 until a secret is set. Use the same string in
+    # GitHub > Settings > Webhooks > Secret.
+    github_webhook_secret: str = ""
+    # Repos whose events count, comma-separated owner/name.
+    github_repos: str = ""
+    # branch=state pairs for successful deploy workflow runs.
+    github_deploy_rules: str = "develop=staging,main=production"
+    # Task IDs in branch names and PR titles look like HUB-12.
+    hub_id_prefix: str = "HUB"
+
     @property
     def email_enabled(self) -> bool:
         return bool(self.smtp_host and self.smtp_from)

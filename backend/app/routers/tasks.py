@@ -67,13 +67,18 @@ from app.schemas import (
     TaskAssign,
     TaskBrief,
     TaskCreate,
+    TaskLinkCreate,
+    TaskLinkOut,
+    TaskRef,
+    TemplateOut,
     TaskDetailOut,
     TaskEventOut,
     TaskOut,
     TaskUpdate,
 )
 from app.notify import by_handles, leads, mentioned_handles, notify
-from app.models import NotifyKind
+from app.models import LinkKind, NotifyKind, TaskKind, TaskLink
+from app import templates
 from app.transitions import PARKABLE, PARKING, TransitionError, check_rejection, check_transition
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -200,6 +205,9 @@ def _counts(task: Task) -> tuple[int, int, int]:
 def _out(task: Task, model=TaskOut, **extra):
     row = model.model_validate(task)
     row.criteria_total, row.criteria_open, row.open_questions = _counts(task)
+    row.blocked_by = task.open_blockers()
+    row.children_total = len(task.children)
+    row.children_open = sum(1 for c in task.children if c.status not in CLOSED_STATUSES)
     for key, value in extra.items():
         setattr(row, key, value)
     return row
@@ -212,7 +220,59 @@ def _detail(task: Task) -> TaskDetailOut:
     row.docs = [doc_meta(d) for d in task.docs]
     row.files = [FileOut.model_validate(f) for f in task.files if f.removed_at is None]
     row.context = [ContextOut.model_validate(c) for c in task.context]
+    row.parent = TaskRef.model_validate(task.parent) if task.parent else None
+    row.children = [TaskRef.model_validate(c) for c in task.children]
+    row.links = _links_out(task)
     return row
+
+
+def _link_label(link: TaskLink, outgoing: bool) -> str:
+    verb = {LinkKind.blocks: "blocks", LinkKind.relates: "relates to", LinkKind.duplicates: "duplicates"}[link.kind]
+    if outgoing:
+        return f"this task {verb} #{link.to_task_id}"
+    return f"#{link.from_task_id} {verb} this task"
+
+
+def _links_out(task: Task) -> list[TaskLinkOut]:
+    out = []
+    for link in task.outgoing_links:
+        out.append(TaskLinkOut(id=link.id, kind=link.kind, direction="outgoing", label=_link_label(link, True),
+                               other=TaskRef.model_validate(link.to_task), created_at=link.created_at))
+    for link in task.incoming_links:
+        out.append(TaskLinkOut(id=link.id, kind=link.kind, direction="incoming", label=_link_label(link, False),
+                               other=TaskRef.model_validate(link.from_task), created_at=link.created_at))
+    return out
+
+
+def _check_parent(db: Session, task_id: int | None, parent_id: int, user: User) -> Task:
+    """Two levels only: the parent has no parent, and the child has no children."""
+    parent = db.get(Task, parent_id)
+    if parent is None or not _can_see(parent, user):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"parent_id: no task {parent_id}")
+    if parent.id == task_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A task cannot be its own parent")
+    if parent.parent_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Task {parent.id} is itself a subtask; subtasks go two levels deep",
+        )
+    if task_id is not None and db.scalar(select(func.count(Task.id)).where(Task.parent_id == task_id)):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="This task has subtasks, so it cannot become a subtask",
+        )
+    if parent.status in CLOSED_STATUSES:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Task {parent.id} is closed")
+    return parent
+
+
+def _refuse_if_blocked(task: Task) -> None:
+    blockers = task.open_blockers()
+    if blockers:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Blocked by open task " + ", ".join(f"#{b}" for b in blockers) + ". Finish or unlink it first.",
+        )
 
 
 def _validate_assignees(db: Session, assignee_1_id: int | None, assignee_2_id: int | None) -> None:
@@ -324,6 +384,52 @@ def create_task(
             )
     _validate_assignees(db, payload.assignee_1_id, payload.assignee_2_id)
 
+    missing = templates.missing_sections(payload.kind, payload.description)
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"A {payload.kind.value} needs these headings with text in the description: "
+                + ", ".join(missing) + ". GET /tasks/templates shows the skeleton."
+            ),
+        )
+    if payload.parent_id is not None:
+        _check_parent(db, None, payload.parent_id, user)
+
+    if payload.fingerprint:
+        existing = db.scalar(
+            select(Task).where(
+                Task.fingerprint == payload.fingerprint, Task.status.not_in(list(CLOSED_STATUSES))
+            )
+        )
+        if existing is not None:
+            # Same problem again: note it on the open task instead of a copy.
+            record(db, auth, task_id=existing.id, event_type=EventType.seen_again,
+                   data={"title": lint.clean(payload.title, field="title")})
+            db.commit()
+            if not _can_see(existing, user):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                    detail="An open task already tracks this fingerprint")
+            out = _detail(_get_task_or_404(db, existing.id))
+            out.duplicate_of_existing = True
+            return out
+        recent = db.scalar(
+            select(Task).where(
+                Task.fingerprint == payload.fingerprint,
+                Task.status == S.dropped,
+                Task.updated_at >= utcnow() - timedelta(days=90),
+            )
+        )
+        if recent is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Task {recent.id} with this fingerprint was dropped on "
+                    f"{recent.updated_at:%Y-%m-%d} ({recent.drop_reason or 'no reason'}); "
+                    "it is not filed again for 90 days."
+                ),
+            )
+
     if propose_only:
         start = S.proposed
     elif is_leader:
@@ -348,11 +454,17 @@ def create_task(
         pool=bool(payload.pool),
         created_kind=auth.kind,
         created_agent=auth.agent,
+        kind=payload.kind,
+        parent_id=payload.parent_id,
+        fingerprint=payload.fingerprint,
     )
     db.add(task)
     db.flush()  # assign task.id before logging the event
 
-    for n, text in enumerate(payload.criteria, start=1):
+    criteria = payload.criteria or (
+        templates.TEMPLATES[payload.kind]["criteria"] if payload.use_template else []
+    )
+    for n, text in enumerate(criteria, start=1):
         db.add(Criterion(task_id=task.id, n=n, text=lint.clean(text, field=f"criterion {n}")))
 
     record(
@@ -390,6 +502,8 @@ def list_tasks(
     created_kind: ActorKind | None = None,
     created_by: int | None = None,
     from_bots: bool = Query(default=False, description="Only tasks a bot account filed"),
+    kind: TaskKind | None = None,
+    parent_id: int | None = None,
     limit: int = Query(default=500, ge=1, le=1000),
 ) -> list[TaskOut]:
     if not auth.has("tasks:read"):
@@ -432,12 +546,19 @@ def list_tasks(
     if from_bots:
         bot_ids = select(User.id).where(User.account_type == AccountType.bot)
         stmt = stmt.where(Task.created_by.in_(bot_ids))
+    if kind is not None:
+        stmt = stmt.where(Task.kind == kind)
+    if parent_id is not None:
+        stmt = stmt.where(Task.parent_id == parent_id)
     if q:
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(Task.title.ilike(like), Task.description.ilike(like), Task.summary.ilike(like)))
 
-    if tag:
-        tasks = [t for t in db.scalars(stmt).unique() if tag in (t.tags or [])][:limit]
+    if tag or ready:
+        tasks = [
+            t for t in db.scalars(stmt).unique()
+            if (not tag or tag in (t.tags or [])) and (not ready or not t.open_blockers())
+        ][:limit]
     else:
         tasks = list(db.scalars(stmt.limit(limit)).unique())
     return [_out(t) for t in tasks]
@@ -541,6 +662,80 @@ def triage(
         results.append(TriageResult(id=task_id, ok=True, status=payload.to))
     db.commit()
     return results
+
+
+@router.get("/templates", response_model=list[TemplateOut])
+def list_templates(auth: AuthCtx) -> list[dict]:
+    """The skeleton, required headings and starter criteria for each task kind."""
+    return templates.as_json()
+
+
+@router.post("/{task_id}/links", response_model=TaskDetailOut, status_code=status.HTTP_201_CREATED)
+def add_link(
+    task_id: int,
+    payload: TaskLinkCreate,
+    db: DbSession,
+    auth: Auth = Depends(require_scope("tasks:write")),
+) -> TaskDetailOut:
+    """Link this task to another: blocks, relates or duplicates."""
+    task = _get_task_or_404(db, task_id)
+    user = auth.user
+    _assert_visible(task, user)
+    other = db.get(Task, payload.to_task_id)
+    if other is None or not _can_see(other, user):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"to_task_id: no task {payload.to_task_id}")
+    if other.id == task.id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A task cannot link to itself")
+    if not (_is_worker(task, user) or _is_worker(other, user)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Work on one of the two tasks to link them")
+    if payload.kind is LinkKind.blocks:
+        # No cycles: walk what `task` is blocked by; `other` must not be there.
+        seen, todo = set(), [task.id]
+        while todo:
+            current = todo.pop()
+            if current == other.id:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                    detail=f"#{other.id} already waits on #{task.id}; that would be a loop")
+            if current in seen:
+                continue
+            seen.add(current)
+            todo += list(db.scalars(select(TaskLink.from_task_id).where(
+                TaskLink.to_task_id == current, TaskLink.kind == LinkKind.blocks)))
+    exists = db.scalar(select(TaskLink).where(
+        TaskLink.from_task_id == task.id, TaskLink.to_task_id == other.id, TaskLink.kind == payload.kind))
+    if exists is None:
+        db.add(TaskLink(from_task_id=task.id, to_task_id=other.id, kind=payload.kind,
+                        created_by=user.id, actor_kind=auth.kind, created_at=utcnow()))
+        record(db, auth, task_id=task.id, event_type=EventType.linked,
+               data={"kind": payload.kind.value, "to": other.id})
+        record(db, auth, task_id=other.id, event_type=EventType.linked,
+               data={"kind": payload.kind.value, "from": task.id})
+        _touch(task)
+        db.commit()
+    return _detail(_get_task_or_404(db, task.id))
+
+
+@router.delete("/{task_id}/links/{link_id}", response_model=TaskDetailOut)
+def remove_link(
+    task_id: int,
+    link_id: int,
+    db: DbSession,
+    auth: Auth = Depends(require_scope("tasks:write")),
+) -> TaskDetailOut:
+    task = _get_task_or_404(db, task_id)
+    user = auth.user
+    _assert_visible(task, user)
+    link = db.get(TaskLink, link_id)
+    if link is None or task.id not in (link.from_task_id, link.to_task_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link not found")
+    if not (_is_worker(link.from_task, user) or _is_worker(link.to_task, user)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Work on one of the two tasks to unlink them")
+    data = {"kind": link.kind.value, "from": link.from_task_id, "to": link.to_task_id}
+    db.delete(link)
+    record(db, auth, task_id=task.id, event_type=EventType.unlinked, data=data)
+    _touch(task)
+    db.commit()
+    return _detail(_get_task_or_404(db, task.id))
 
 
 @router.get("/{task_id}", response_model=TaskDetailOut)
@@ -654,6 +849,11 @@ def brief(task_id: int, auth: AuthCtx, db: DbSession) -> TaskBrief:
         docs=docs,
         context=context,
         files=files,
+        kind=task.kind.value,
+        parent=f"#{task.parent.id} {task.parent.title[:80]}" if task.parent else None,
+        children=[f"#{c.id} [{c.status.value}] {c.title[:60]}" for c in task.children[:10]],
+        blocked_by=[f"#{b}" for b in task.open_blockers()],
+        links=[link.label for link in _links_out(task)][:10],
         truncated=truncated,
     )
 
@@ -705,6 +905,12 @@ def update_task(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Only a leader can change: {', '.join(sorted(extra))}",
             )
+
+    if "parent_id" in fields:
+        new_parent = fields["parent_id"] or None
+        fields["parent_id"] = new_parent
+        if new_parent is not None:
+            _check_parent(db, task.id, new_parent, user)
 
     changes: dict[str, list] = {}
     for field, value in fields.items():
@@ -766,6 +972,15 @@ def change_status(
     comment = lint.clean(payload.comment, field="comment")
     now = utcnow()
 
+    if target is S.in_progress and from_status is not S.in_review:
+        _refuse_if_blocked(task)
+    if target is S.done:
+        open_children = [c.id for c in task.children if c.status not in CLOSED_STATUSES]
+        if open_children:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Subtasks still open: " + ", ".join(f"#{c}" for c in open_children),
+            )
     if target in {S.in_review, S.done}:
         open_numbers = _open_criteria_numbers(task)
         if open_numbers:
@@ -919,6 +1134,7 @@ def claim_task(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Only to_do or in_progress tasks can be claimed (task is '{task.status.value}')",
         )
+    _refuse_if_blocked(task)
     if not user.is_lead and user.id not in task.assignee_ids and not task.pool:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

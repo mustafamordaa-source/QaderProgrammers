@@ -19,7 +19,9 @@ from app.models import (
     AccessRole,
     AccountType,
     DocKind,
+    LinkKind,
     Priority,
+    TaskKind,
     Role,
     Side,
     TaskStatus,
@@ -248,9 +250,42 @@ class GitLinkOut(ORMModel):
     url: str | None
     title: str | None
     state: str | None
+    base_ref: str | None = None
+    merged_at: datetime | None = None
     actor_kind: ActorKind
     created_at: datetime
     updated_at: datetime
+
+
+class TaskRef(ORMModel):
+    id: int
+    title: str
+    status: TaskStatus
+    kind: TaskKind = TaskKind.task
+
+
+class TaskLinkOut(BaseModel):
+    id: int
+    kind: LinkKind
+    # "outgoing": this task -> other; "incoming": other -> this task.
+    direction: str
+    # Reads as a sentence: "this task blocks #12", "#9 blocks this task".
+    label: str
+    other: TaskRef
+    created_at: datetime
+
+
+class TaskLinkCreate(BaseModel):
+    kind: LinkKind
+    to_task_id: int
+
+
+class TemplateOut(BaseModel):
+    kind: TaskKind
+    label: str
+    skeleton: str
+    required: list[str]
+    criteria: list[str]
 
 
 class TaskOut(ORMModel):
@@ -289,10 +324,16 @@ class TaskOut(ORMModel):
     deploy_note: str | None = None
     deployed_at: datetime | None = None
     drop_reason: str | None = None
+    kind: TaskKind = TaskKind.task
+    parent_id: int | None = None
+    fingerprint: str | None = None
     # Filled by the router.
     criteria_total: int = 0
     criteria_open: int = 0
     open_questions: int = 0
+    blocked_by: list[int] = []
+    children_total: int = 0
+    children_open: int = 0
 
 
 class TaskDetailOut(TaskOut):
@@ -303,6 +344,11 @@ class TaskDetailOut(TaskOut):
     docs: list["DocMeta"] = []
     files: list["FileOut"] = []
     context: list["ContextOut"] = []
+    parent: "TaskRef | None" = None
+    children: list["TaskRef"] = []
+    links: list["TaskLinkOut"] = []
+    # Set when a create matched an open task by fingerprint.
+    duplicate_of_existing: bool = False
 
 
 class ClaimOut(TaskOut):
@@ -353,8 +399,12 @@ class TaskCreate(_TaskHubFields, _AssigneeValidatorMixin):
     assignee_2_id: int | None = None
     # Leaders choose; members always create into backlog.
     status: TaskStatus = TaskStatus.to_do
-    # Acceptance criteria, one line each.
+    # Acceptance criteria, one line each. Empty: the kind's template criteria.
     criteria: list[str] = Field(default_factory=list, max_length=30)
+    kind: TaskKind = TaskKind.task
+    use_template: bool = True
+    parent_id: int | None = None
+    fingerprint: str | None = Field(default=None, max_length=200, pattern=r"^[\w:./@#-]{3,200}$")
 
     _check_points = field_validator("points")(staticmethod(_validate_points))
 
@@ -392,6 +442,9 @@ class TaskUpdate(_TaskHubFields):
     priority: Priority | None = None
     points: int | None = None
     due_date: datetime | None = None
+    kind: TaskKind | None = None
+    # 0 clears it.
+    parent_id: int | None = None
     expected_version: int | None = None
 
     _check_points = field_validator("points")(staticmethod(_validate_points))
@@ -495,6 +548,11 @@ class TaskBrief(BaseModel):
     docs: list[str] = []
     context: list[str] = []
     files: list[str] = []
+    kind: str = "task"
+    parent: str | None = None
+    children: list[str] = []
+    blocked_by: list[str] = []
+    links: list[str] = []
     truncated: bool
 
 
