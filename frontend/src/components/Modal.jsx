@@ -2,6 +2,10 @@ import { useEffect, useRef } from 'react'
 
 const SIZES = { normal: 'max-w-lg', wide: 'max-w-2xl', xl: 'max-w-5xl' }
 
+// Open modals, newest last. Escape closes only the top one, so a create form
+// opened from a task's detail does not take the detail down with it.
+const openStack = []
+
 export default function Modal({ title, onClose, children, wide = false, size }) {
   const panelRef = useRef(null)
   // Keep the latest onClose without re-running the effect: a parent that
@@ -11,12 +15,18 @@ export default function Modal({ title, onClose, children, wide = false, size }) 
   onCloseRef.current = onClose
 
   useEffect(() => {
+    const token = {}
+    openStack.push(token)
     function onKeyDown(event) {
-      if (event.key === 'Escape') onCloseRef.current()
+      if (event.key === 'Escape' && openStack[openStack.length - 1] === token) onCloseRef.current()
     }
     document.addEventListener('keydown', onKeyDown)
     panelRef.current?.focus()
-    return () => document.removeEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      const index = openStack.indexOf(token)
+      if (index !== -1) openStack.splice(index, 1)
+    }
   }, [])
 
   return (

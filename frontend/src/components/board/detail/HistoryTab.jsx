@@ -4,13 +4,26 @@ import {
   DEPLOY_LABELS,
   EVENT_LABELS,
   GIT_KIND_LABELS,
+  KIND_LABELS,
+  LINK_KIND_VERBS,
   SIDE_LABELS,
   STATUS_LABELS,
   formatBytes,
 } from '../../../lib/constants'
 import { formatDateTime } from '../../../lib/format'
 
+/** A link event as a sentence from this task's side. */
+function linkLine(data) {
+  const verb = LINK_KIND_VERBS[data.kind] ?? data.kind
+  if (data.to && data.from) return `#${data.from} ${verb} #${data.to}`
+  if (data.to) return `This task ${verb} #${data.to}`
+  if (data.from) return `#${data.from} ${verb} this task`
+  return verb
+}
+
 const FIELD_LABELS = {
+  kind: 'Kind',
+  parent_id: 'Parent',
   title: 'Title',
   description: 'Description',
   summary: 'Summary',
@@ -34,6 +47,8 @@ function plain(value) {
 
 function fieldValue(field, value) {
   if (field === 'side' && value) return SIDE_LABELS[value] ?? value
+  if (field === 'kind' && value) return KIND_LABELS[value] ?? value
+  if (field === 'parent_id') return value ? `#${value}` : 'none'
   if (field === 'due_date' && value) return formatDateTime(value)
   if (field === 'summary' && typeof value === 'string' && value.length > 120) {
     return `${value.slice(0, 119)}…`
@@ -119,6 +134,12 @@ function describe(event, peopleById) {
       return [data.url ?? (data.repo ? `${data.repo}: ${data.path}` : null)].filter(Boolean)
     case 'context_removed':
       return [data.title].filter(Boolean)
+    case 'linked':
+      return [linkLine(data)]
+    case 'unlinked':
+      return [`Removed: ${linkLine(data)}`]
+    case 'seen_again':
+      return [data.title ? `Filed again as: ${data.title}` : 'Filed again with the same fingerprint']
     default:
       return Object.entries(data).map(([key, value]) => `${key}: ${plain(value)}`)
   }

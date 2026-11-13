@@ -1,6 +1,8 @@
 import {
   ActorBadge,
+  BlockedBadge,
   DeployBadge,
+  KindBadge,
   OverdueBadge,
   PointsBadge,
   PriorityBadge,
@@ -85,7 +87,14 @@ export default function TaskCard({
           />
         )}
         <button type="button" onClick={() => onOpen(task)} className="block min-w-0 flex-1 text-left">
-          <span className="tabular text-[11px] text-ink-muted">#{task.id}</span>
+          <span className="tabular text-[11px] text-ink-muted">
+            #{task.id}
+            {task.parent_id && (
+              <span className="ms-1.5" title={`Subtask of #${task.parent_id}`}>
+                ↳ #{task.parent_id}
+              </span>
+            )}
+          </span>
           <h3 dir="auto" className="break-words text-sm font-medium leading-snug">
             {task.title}
           </h3>
@@ -94,6 +103,7 @@ export default function TaskCard({
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         {showStatus && <StatusBadge status={task.status} />}
+        <KindBadge kind={task.kind} hideTask />
         <SideBadge side={task.side} />
         <PointsBadge points={task.points} />
         <PriorityBadge priority={task.priority} />
@@ -109,8 +119,25 @@ export default function TaskCard({
         <DeployBadge state={task.deploy_state} hideNone />
       </div>
 
-      {(task.criteria_total > 0 || task.open_questions > 0 || claimIsLive(task)) && (
+      {(task.criteria_total > 0 ||
+        task.open_questions > 0 ||
+        claimIsLive(task) ||
+        task.blocked_by?.length > 0 ||
+        task.children_total > 0) && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <BlockedBadge ids={task.blocked_by} />
+          {task.children_total > 0 && (
+            <span
+              title="Subtasks closed out of total"
+              className={`tabular inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                task.children_open === 0
+                  ? 'border-good/40 text-good'
+                  : 'border-hairline text-ink-secondary'
+              }`}
+            >
+              {task.children_total - task.children_open}/{task.children_total} subtasks
+            </span>
+          )}
           {task.criteria_total > 0 && (
             <span
               title="Acceptance criteria met (or dropped) out of total"

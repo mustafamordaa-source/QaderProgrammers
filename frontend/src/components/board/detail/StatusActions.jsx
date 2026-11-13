@@ -5,6 +5,7 @@ import {
   allowedTargets,
   isParked,
   moveNeedsCriteriaMet,
+  taskIdList,
 } from '../../../lib/constants'
 import { dangerButton, inputClass, primaryButton, secondaryButton, sectionTitle } from './ui'
 
@@ -54,6 +55,17 @@ export default function StatusActions({ ctx }) {
 
   const targets = allowedTargets(task, user, isWorker)
   const criteriaOpen = task.criteria_open ?? 0
+  const blockers = task.blocked_by ?? []
+  const childrenOpen = task.children_open ?? 0
+  // Mirrors change_status: an open blocker refuses a start (a send-back from
+  // review still goes through), an open subtask refuses Done.
+  const blockedStart = (target) =>
+    target === 'in_progress' && task.status !== 'in_review' && blockers.length > 0
+  const childLocked = (target) => target === 'done' && childrenOpen > 0
+  const blockerText = `Blocked by open task ${taskIdList(blockers)}. Finish or unlink it first.`
+  const childText = `${childrenOpen} subtask${childrenOpen === 1 ? ' is' : 's are'} still open. Close ${
+    childrenOpen === 1 ? 'it' : 'them'
+  } before Done.`
 
   if (targets.length === 0) {
     let hint = null
@@ -107,12 +119,19 @@ export default function StatusActions({ ctx }) {
       <div className="mt-2 flex flex-wrap gap-2">
         {targets.map((target) => {
           const lockedByCriteria = moveNeedsCriteriaMet(target) && criteriaOpen > 0
+          const reason = blockedStart(target)
+            ? blockerText
+            : childLocked(target)
+              ? childText
+              : lockedByCriteria
+                ? 'Mark every criterion met or dropped first'
+                : undefined
           return (
             <button
               key={target}
               type="button"
-              disabled={busy || lockedByCriteria}
-              title={lockedByCriteria ? 'Mark every criterion met or dropped first' : undefined}
+              disabled={busy || Boolean(reason)}
+              title={reason}
               onClick={() => choose(target)}
               className={buttonClass(task, target, isLead)}
             >
@@ -127,6 +146,8 @@ export default function StatusActions({ ctx }) {
           each met (with evidence) or dropped before review or done.
         </p>
       )}
+      {targets.some(blockedStart) && <p className="mt-2 text-xs text-ink-muted">{blockerText}</p>}
+      {targets.some(childLocked) && <p className="mt-2 text-xs text-ink-muted">{childText}</p>}
 
       {pending && (
         <form onSubmit={submit} className="mt-3">

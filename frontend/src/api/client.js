@@ -100,11 +100,18 @@ export const api = {
   createToken: (payload) => request('/auth/tokens', { method: 'POST', body: payload }),
   revokeToken: (id) => request(`/auth/tokens/${id}`, { method: 'DELETE' }),
 
-  // filters: { mine, ready, side, tag, q, status_filter, include_closed, created_kind, created_by }
+  // filters: { mine, ready, side, tag, q, status_filter, include_closed, created_kind, created_by,
+  //            kind, parent_id, limit }
   tasks: (filters) => request('/tasks', { params: filters }),
   inbox: () => request('/tasks/inbox'),
   task: (id) => request(`/tasks/${id}`),
+  // Skeleton, required headings and starter criteria per task kind.
+  templates: () => request('/tasks/templates'),
+  // The answer has `duplicate_of_existing: true` when a fingerprint matched an open task.
   createTask: (payload) => request('/tasks', { method: 'POST', body: payload }),
+  addTaskLink: (id, kind, toTaskId) =>
+    request(`/tasks/${id}/links`, { method: 'POST', body: { kind, to_task_id: toTaskId } }),
+  removeTaskLink: (id, linkId) => request(`/tasks/${id}/links/${linkId}`, { method: 'DELETE' }),
   updateTask: (id, payload) => request(`/tasks/${id}`, { method: 'PATCH', body: payload }),
   changeStatus: (id, { status, comment, expectedVersion }) =>
     request(`/tasks/${id}/status`, {

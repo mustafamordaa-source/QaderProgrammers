@@ -6,7 +6,7 @@ import KanbanBoard from '../components/board/KanbanBoard'
 import CreateTaskModal from '../components/board/CreateTaskModal'
 import TaskDetailModal from '../components/board/TaskDetailModal'
 import TriageBar from '../components/board/TriageBar'
-import { SIDES, SIDE_LABELS, assignablePeople } from '../lib/constants'
+import { KIND_LABELS, SIDES, SIDE_LABELS, TASK_KINDS, assignablePeople } from '../lib/constants'
 
 const controlClass =
   'rounded-lg border border-hairline bg-surface-raised px-3 py-1.5 text-sm outline-none focus:border-series1'
@@ -26,6 +26,8 @@ export default function BoardPage() {
   const [tasks, setTasks] = useState([])
   const [people, setPeople] = useState([])
   const [selected, setSelected] = useState(null)
+  // A message to show at the top of the next task opened (a duplicate create).
+  const [selectedNotice, setSelectedNotice] = useState(null)
   const [creating, setCreating] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -38,6 +40,7 @@ export default function BoardPage() {
   const [side, setSide] = useState('')
   const [tagInput, setTagInput] = useState('')
   const [search, setSearch] = useState('')
+  const [kind, setKind] = useState('')
   // Leads: show only what agents filed, and tick Triage cards for bulk triage.
   const [fromAgents, setFromAgents] = useState(false)
   const [picked, setPicked] = useState(() => new Set())
@@ -55,6 +58,7 @@ export default function BoardPage() {
         side,
         tag,
         q,
+        kind,
         created_kind: fromAgents ? 'agent' : undefined,
       })
       if (id !== requestId.current) return
@@ -65,7 +69,7 @@ export default function BoardPage() {
     } finally {
       if (id === requestId.current) setLoading(false)
     }
-  }, [mine, side, tag, q, fromAgents])
+  }, [mine, side, tag, q, kind, fromAgents])
 
   useEffect(() => {
     load()
@@ -87,11 +91,31 @@ export default function BoardPage() {
     setSelected((current) => (current?.id === updated.id ? updated : current))
   }
 
-  async function openTask(task) {
-    // The list payload omits comments, criteria, links and events.
-    setSelected(task)
+  // Another task the open detail changed. A new subtask joins the board; an
+  // existing task's card refreshes only when the board already shows it, so
+  // the filters keep holding.
+  function applyOther(updated, { created = false } = {}) {
+    if (created) {
+      applyUpdate(updated)
+      return
+    }
+    setTasks((current) =>
+      current.some((task) => task.id === updated.id)
+        ? current.map((task) => (task.id === updated.id ? updated : task))
+        : current,
+    )
+  }
+
+  /** Open a task from a card (a list row) or by ID from inside another task. */
+  async function openTask(taskOrId, message = null) {
+    const id = typeof taskOrId === 'number' ? taskOrId : taskOrId.id
+    setSelectedNotice(message)
+    // The list payload omits comments, criteria, links and events. By ID, the
+    // current task stays up until the new one arrives, unless the board has it.
+    const quick = typeof taskOrId === 'number' ? tasks.find((t) => t.id === id) : taskOrId
+    if (quick) setSelected(quick)
     try {
-      setSelected(await api.task(task.id))
+      setSelected(await api.task(id))
     } catch (err) {
       setError(err.message)
     }
@@ -134,6 +158,7 @@ export default function BoardPage() {
 
   function closeTask() {
     setSelected(null)
+    setSelectedNotice(null)
     if (searchParams.has('task')) {
       setSearchParams((params) => {
         params.delete('task')
@@ -158,10 +183,18 @@ export default function BoardPage() {
 
   async function handleCreate(payload) {
     const created = await api.createTask(payload)
+    if (created.duplicate_of_existing) {
+      // A fingerprint matched an open task: the server noted it there instead.
+      applyOther(created)
+      setSelectedNotice(`An open task already covers this: #${created.id}. It is open now instead of a new one.`)
+      setSelected(created)
+      return created
+    }
     applyUpdate(created)
     if (!isLead) {
       setNotice(`Task #${created.id} is in the backlog. A lead will triage it.`)
     }
+    return created
   }
 
   // Keep only ticks on tasks still waiting in Triage.
@@ -198,7 +231,7 @@ export default function BoardPage() {
     await load()
   }
 
-  const filtered = mine || side || tag || q || fromAgents
+  const filtered = mine || side || tag || q || kind || fromAgents
   const programmers = assignablePeople(people)
 
   return (
@@ -244,6 +277,19 @@ export default function BoardPage() {
             </option>
           ))}
         </select>
+        <select
+          aria-label="Kind"
+          value={kind}
+          onChange={(event) => setKind(event.target.value)}
+          className={`${controlClass} ${kind ? 'border-series1 text-series1' : ''}`}
+        >
+          <option value="">All kinds</option>
+          {TASK_KINDS.map((value) => (
+            <option key={value} value={value}>
+              {KIND_LABELS[value]}
+            </option>
+          ))}
+        </select>
         <input
           aria-label="Tag"
           placeholder="Tag"
@@ -284,6 +330,7 @@ export default function BoardPage() {
               setSide('')
               setTagInput('')
               setSearch('')
+              setKind('')
               setFromAgents(false)
             }}
             className="text-xs text-ink-secondary underline-offset-2 hover:text-ink hover:underline"
@@ -347,11 +394,15 @@ export default function BoardPage() {
 
       {selected && (
         <TaskDetailModal
+          key={selected.id}
           task={selected}
           user={user}
           people={people}
           onClose={closeTask}
           onChanged={applyUpdate}
+          onOpenTask={openTask}
+          onOtherChanged={(other) => applyOther(other, { created: other.parent_id === selected.id })}
+          initialNotice={selectedNotice}
         />
       )}
     </>

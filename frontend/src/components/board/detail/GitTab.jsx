@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from '../../../api/client'
-import { ActorBadge } from '../../Badges'
+import { ActorBadge, GitHubBadge } from '../../Badges'
 import { GIT_KINDS, GIT_KIND_LABELS, GIT_STATES } from '../../../lib/constants'
 import { formatDateTime } from '../../../lib/format'
 import { primaryButton, smallInputClass } from './ui'
@@ -146,12 +146,23 @@ export default function GitTab({ ctx, links }) {
                     {link.title}
                   </span>
                 )}
+                {link.base_ref && (
+                  <span className="text-xs text-ink-muted">
+                    into <code dir="ltr" className="font-mono text-ink-secondary">{link.base_ref}</code>
+                  </span>
+                )}
                 {link.state && (
                   <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${STATE_STYLES[link.state] ?? STATE_STYLES.closed}`}>
                     {link.state}
                   </span>
                 )}
-                <ActorBadge kind={link.actor_kind} />
+                {link.merged_at && (
+                  <span className="text-xs text-good" title={formatDateTime(link.merged_at)}>
+                    merged {formatDateTime(link.merged_at)}
+                  </span>
+                )}
+                {/* The webhook writes as the `github` account with actor kind `system`. */}
+                {link.actor_kind === 'system' ? <GitHubBadge /> : <ActorBadge kind={link.actor_kind} />}
                 <time className="ms-auto text-xs text-ink-muted">{formatDateTime(link.updated_at)}</time>
               </li>
             )

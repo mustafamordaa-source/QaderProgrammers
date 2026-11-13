@@ -1,14 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Modal from '../Modal'
 import PointsPicker from './PointsPicker'
+import TaskPicker from './TaskPicker'
+import { loadTemplates } from './taskTemplates'
 import {
   CREATE_STATUSES,
   DEFAULT_POINTS,
+  KIND_LABELS,
   PRIORITIES,
   PRIORITY_LABELS,
   SIDES,
   SIDE_LABELS,
   STATUS_LABELS,
+  TASK_KINDS,
   splitList,
 } from '../../lib/constants'
 import { fromDateInputValue } from '../../lib/format'
@@ -22,7 +26,19 @@ const STATUS_HINTS = {
   to_do: 'Planned and ready to pick up.',
 }
 
-export default function CreateTaskModal({ isLead, programmers, onClose, onCreate }) {
+// The server refuses a kind's required headings with this 422 detail.
+const MISSING_HEADINGS = /needs these headings/i
+
+function subtaskRefusal(task) {
+  return task.parent_id ? 'Already a subtask; subtasks go two levels deep' : null
+}
+
+/**
+ * `preset` fills a new subtask from its parent: `{ parent: TaskRef, side, tags }`.
+ * `onCreate(payload)` returns the created task; the caller handles
+ * `duplicate_of_existing`.
+ */
+export default function CreateTaskModal({ isLead, programmers, onClose, onCreate, preset = null }) {
   const [form, setForm] = useState({
     title: '',
     description: '',
@@ -31,24 +47,64 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
     due_date: '',
     assignee_1_id: '',
     assignee_2_id: '',
-    side: '',
-    tags: '',
+    side: preset?.side ?? '',
+    tags: (preset?.tags ?? []).join(', '),
     areas: '',
     criteria: '',
     status: 'to_do',
     restricted: false,
     pool: false,
+    kind: 'task',
+    use_template: true,
   })
+  const [parent, setParent] = useState(preset?.parent ?? null)
+  const [templates, setTemplates] = useState(null)
+  const [templatesError, setTemplatesError] = useState(null)
+  // A kind whose skeleton waits for the user's yes before replacing typed text.
+  const [askReplace, setAskReplace] = useState(null)
   const [error, setError] = useState(null)
+  const [descriptionError, setDescriptionError] = useState(null)
   const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    loadTemplates()
+      .then((list) => {
+        if (!cancelled) setTemplates(Object.fromEntries(list.map((t) => [t.kind, t])))
+      })
+      .catch((err) => {
+        if (!cancelled) setTemplatesError(err.message)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const template = templates?.[form.kind] ?? null
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }))
   }
 
+  function chooseKind(kind) {
+    setAskReplace(null)
+    setDescriptionError(null)
+    const next = templates?.[kind]
+    const previousSkeleton = templates?.[form.kind]?.skeleton ?? ''
+    // Text the user has not touched since the last skeleton counts as empty.
+    const untouched = !form.description.trim() || form.description === previousSkeleton
+    setForm((current) => ({
+      ...current,
+      kind,
+      description: untouched ? (next?.skeleton ?? '') : current.description,
+    }))
+    if (!untouched && next?.skeleton && form.description !== next.skeleton) setAskReplace(kind)
+  }
+
   async function handleSubmit(event) {
     event.preventDefault()
     setError(null)
+    setDescriptionError(null)
     setSaving(true)
     const payload = {
       title: form.title.trim(),
@@ -63,6 +119,9 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean),
+      kind: form.kind,
+      use_template: form.use_template,
+      parent_id: parent?.id ?? null,
     }
     if (isLead) {
       Object.assign(payload, {
@@ -79,7 +138,8 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
       await onCreate(payload)
       onClose()
     } catch (err) {
-      setError(err.message)
+      if (err.status === 422 && MISSING_HEADINGS.test(err.message)) setDescriptionError(err.message)
+      else setError(err.message)
     } finally {
       setSaving(false)
     }
@@ -91,13 +151,44 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
   )
 
   return (
-    <Modal title="Create task" onClose={onClose} wide>
+    <Modal title={preset?.parent ? `Add a subtask to #${preset.parent.id}` : 'Create task'} onClose={onClose} wide>
       <form onSubmit={handleSubmit}>
         {!isLead && (
           <p className="mb-4 rounded-lg border border-hairline bg-surface-raised px-3 py-2 text-sm text-ink-secondary">
             Your task goes to the backlog. A lead triages it, assigns it and plans it.
           </p>
         )}
+
+        <fieldset className="mb-4">
+          <legend className="text-sm font-medium">Kind</legend>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {TASK_KINDS.map((kind) => (
+              <label
+                key={kind}
+                className={`cursor-pointer rounded-full border px-3 py-1 text-sm transition ${
+                  form.kind === kind
+                    ? 'border-series1 bg-series1/5 text-series1'
+                    : 'border-hairline text-ink-secondary hover:text-ink'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="kind"
+                  value={kind}
+                  checked={form.kind === kind}
+                  onChange={() => chooseKind(kind)}
+                  className="sr-only"
+                />
+                {templates?.[kind]?.label ?? KIND_LABELS[kind]}
+              </label>
+            ))}
+          </div>
+          {templatesError && (
+            <p dir="auto" className="mt-1.5 text-xs text-critical">
+              Could not load the kind templates: {templatesError}. You can still create the task.
+            </p>
+          )}
+        </fieldset>
 
         <label className="block text-sm font-medium" htmlFor="title">
           Title
@@ -117,13 +208,80 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
         </label>
         <textarea
           id="description"
-          rows={4}
+          rows={template?.skeleton ? 8 : 4}
           dir="auto"
           maxLength={20000}
           value={form.description}
-          onChange={(event) => update('description', event.target.value)}
-          className={inputClass}
+          onChange={(event) => {
+            update('description', event.target.value)
+            setDescriptionError(null)
+          }}
+          aria-invalid={descriptionError ? true : undefined}
+          aria-describedby={descriptionError ? 'description-error' : undefined}
+          className={`${inputClass} ${template?.skeleton ? 'font-mono text-xs leading-relaxed' : ''} ${
+            descriptionError ? 'border-critical' : ''
+          }`}
         />
+        {askReplace && templates?.[askReplace] && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg border border-warning/50 px-3 py-2 text-xs text-ink-secondary">
+            <span className="flex-1">
+              Replace your description with the {templates[askReplace].label} skeleton? Your text
+              will be lost.
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                update('description', templates[askReplace].skeleton)
+                setAskReplace(null)
+              }}
+              className="rounded-md border border-hairline px-2 py-1 font-medium text-ink transition hover:border-series1"
+            >
+              Replace
+            </button>
+            <button
+              type="button"
+              onClick={() => setAskReplace(null)}
+              className="rounded-md px-2 py-1 text-ink-secondary transition hover:text-ink"
+            >
+              Keep my text
+            </button>
+          </div>
+        )}
+        {template?.required?.length > 0 && (
+          <p className="mt-1.5 text-xs text-ink-muted">
+            A {template.label.toLowerCase()} needs text under:{' '}
+            {template.required.map((heading, index) => (
+              <span key={heading}>
+                {index > 0 && ', '}
+                <code className="font-mono text-ink-secondary">{heading}</code>
+              </span>
+            ))}
+          </p>
+        )}
+        {descriptionError && (
+          <p id="description-error" role="alert" dir="auto" className="mt-1.5 text-sm text-critical">
+            {descriptionError}
+          </p>
+        )}
+
+        <div className="mt-4">
+          <label className="block text-sm font-medium" htmlFor="parent">
+            Subtask of <span className="font-normal text-ink-muted">(optional)</span>
+          </label>
+          <div className="mt-1.5">
+            <TaskPicker
+              id="parent"
+              value={parent}
+              onChange={setParent}
+              accept={subtaskRefusal}
+              clearLabel="Clear"
+              placeholder="Search open tasks, or #ID"
+            />
+          </div>
+          <p className="mt-1.5 text-xs text-ink-muted">
+            Two levels only. The parent cannot reach Done while a subtask is open.
+          </p>
+        </div>
 
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <div>
@@ -221,6 +379,35 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
           Each line becomes a numbered criterion. Review and Done stay locked until every one is
           met (with evidence) or dropped.
         </p>
+        {template?.criteria?.length > 0 &&
+          (form.criteria.trim() ? (
+            <p className="mt-1 text-xs text-ink-muted">
+              Your criteria replace the {template.label.toLowerCase()} template’s starter criteria.
+            </p>
+          ) : (
+            <div className="mt-2 rounded-lg border border-hairline bg-surface-raised px-3 py-2">
+              <p className={`text-xs ${form.use_template ? 'text-ink-secondary' : 'text-ink-muted line-through'}`}>
+                With the box empty, these {template.label.toLowerCase()} criteria get added:
+              </p>
+              <ol
+                className={`mt-1 list-decimal space-y-0.5 ps-5 text-xs ${
+                  form.use_template ? 'text-ink-secondary' : 'text-ink-muted line-through'
+                }`}
+              >
+                {template.criteria.map((text) => (
+                  <li key={text} dir="auto">{text}</li>
+                ))}
+              </ol>
+              <label className="mt-2 inline-flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={!form.use_template}
+                  onChange={(event) => update('use_template', !event.target.checked)}
+                />
+                No template criteria
+              </label>
+            </div>
+          ))}
 
         <div className="mt-4">
           <PointsPicker value={form.points} onChange={(points) => update('points', points)} />

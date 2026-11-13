@@ -266,11 +266,13 @@ export default function InboxPage() {
 
       {selected && (
         <TaskDetailModal
+          key={selected.id}
           task={selected}
           user={user}
           people={people}
           onClose={() => setSelected(null)}
           onChanged={handleChanged}
+          onOpenTask={(id) => openTask(id)}
         />
       )}
     </>

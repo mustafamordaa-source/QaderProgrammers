@@ -2,17 +2,21 @@ import { useState } from 'react'
 import { api } from '../../../api/client'
 import { ActorBadge, DeployBadge, PlainText, TagBadge } from '../../Badges'
 import PointsPicker from '../PointsPicker'
+import TaskPicker from '../TaskPicker'
 import {
   DEPLOY_LABELS,
   DEPLOY_STATES,
+  KIND_LABELS,
   PRIORITIES,
   PRIORITY_LABELS,
   SIDES,
   SIDE_LABELS,
+  TASK_KINDS,
   assignablePeople,
   canClaim,
   claimIsLive,
   splitList,
+  taskIdList,
 } from '../../../lib/constants'
 import {
   formatDate,
@@ -60,7 +64,17 @@ function EditForm({ ctx, programmers, onDone }) {
     pool: Boolean(task.pool),
     assignee_1_id: task.assignee_1_id ? String(task.assignee_1_id) : '',
     assignee_2_id: task.assignee_2_id ? String(task.assignee_2_id) : '',
+    kind: task.kind ?? 'task',
+    parent: task.parent ?? (task.parent_id ? { id: task.parent_id, title: `Task #${task.parent_id}` } : null),
   })
+  const hasChildren = (task.children_total ?? task.children?.length ?? 0) > 0
+
+  // Mirrors _check_parent: two levels only, never itself.
+  function parentRefusal(candidate) {
+    if (candidate.id === task.id) return 'This task'
+    if (candidate.parent_id) return 'Already a subtask; subtasks go two levels deep'
+    return null
+  }
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }))
@@ -85,6 +99,10 @@ function EditForm({ ctx, programmers, onDone }) {
       if (form.due_date !== toDateInputValue(task.due_date)) out.due_date = due
       put('restricted', form.restricted, Boolean(task.restricted))
       put('pool', form.pool, Boolean(task.pool))
+      put('kind', form.kind, task.kind ?? 'task')
+      // 0 clears the parent.
+      const parentId = form.parent?.id ?? null
+      if (parentId !== (task.parent_id ?? null)) out.parent_id = parentId ?? 0
     }
     return out
   }
@@ -199,6 +217,36 @@ function EditForm({ ctx, programmers, onDone }) {
 
       {isLead && (
         <>
+          <div className="grid gap-4 sm:grid-cols-[12rem_1fr]">
+            <div>
+              <label className="block text-sm font-medium" htmlFor="edit-kind">Kind</label>
+              <select id="edit-kind" value={form.kind} onChange={(e) => update('kind', e.target.value)} className={inputClass}>
+                {TASK_KINDS.map((k) => (
+                  <option key={k} value={k}>{KIND_LABELS[k]}</option>
+                ))}
+              </select>
+            </div>
+            <div className="min-w-0">
+              <label className="block text-sm font-medium" htmlFor="edit-parent">Subtask of</label>
+              <div className="mt-1.5">
+                {hasChildren ? (
+                  <p className="text-sm text-ink-muted">
+                    This task has subtasks, so it cannot become a subtask.
+                  </p>
+                ) : (
+                  <TaskPicker
+                    id="edit-parent"
+                    value={form.parent}
+                    onChange={(parent) => update('parent', parent)}
+                    accept={parentRefusal}
+                    clearLabel="Clear"
+                    placeholder="No parent. Search open tasks, or #ID"
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label className="block text-sm font-medium" htmlFor="edit-priority">Priority</label>
@@ -338,6 +386,11 @@ function ClaimPanel({ ctx }) {
   const mine = live && task.claimed_by === user.id
   const claimable = canClaim(task, user) && (!live || mine || isLead)
   const canRelease = task.claimed_by && (task.claimed_by === user.id || isLead)
+  // The server refuses any claim, a renewal too, while an open task blocks this one.
+  const blockers = task.blocked_by ?? []
+  const blockedText = blockers.length
+    ? `Blocked by open task ${taskIdList(blockers)}. Finish or unlink it first.`
+    : null
 
   async function claim(event) {
     event.preventDefault()
@@ -381,11 +434,17 @@ function ClaimPanel({ ctx }) {
             onChange={(e) => setBranch(e.target.value)}
             className={`${smallInputClass} max-w-xs font-mono text-xs`}
           />
-          <button type="submit" disabled={busy} className={primaryButton}>
+          <button
+            type="submit"
+            disabled={busy || Boolean(blockedText)}
+            title={blockedText ?? undefined}
+            className={primaryButton}
+          >
             {mine ? 'Renew claim' : 'Claim'}
           </button>
         </form>
       )}
+      {claimable && blockedText && <p className="mt-1.5 text-xs text-ink-muted">{blockedText}</p>}
       {claimable && task.status === 'to_do' && !mine && (
         <p className="mt-1.5 text-xs text-ink-muted">Claiming a To do task moves it to In progress.</p>
       )}

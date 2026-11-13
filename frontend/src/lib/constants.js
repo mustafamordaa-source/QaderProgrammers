@@ -346,6 +346,45 @@ export const ACTOR_KIND_LABELS = {
   system: 'System',
 }
 
+// Task kinds. Mirrors TaskKind in backend/app/models.py; the templates for
+// each come from GET /tasks/templates.
+export const TASK_KINDS = ['task', 'bug', 'feature', 'chore', 'content', 'docs', 'research']
+
+export const KIND_LABELS = {
+  task: 'Task',
+  bug: 'Bug',
+  feature: 'Feature',
+  chore: 'Chore',
+  content: 'Content',
+  docs: 'Docs',
+  research: 'Research',
+}
+
+export const KIND_STYLES = {
+  task: 'border-hairline text-ink-secondary',
+  bug: 'border-critical/40 bg-critical/5 text-critical',
+  feature: 'border-series1/40 text-series1',
+  chore: 'border-hairline text-ink-muted',
+  content: 'border-series3/40 text-series3',
+  docs: 'border-series3/30 text-ink-secondary',
+  research: 'border-series2/40 text-series2',
+}
+
+// Links between tasks. Mirrors LinkKind in backend/app/models.py.
+export const LINK_KINDS = ['blocks', 'relates', 'duplicates']
+
+// Read as "This task ___ #N".
+export const LINK_KIND_VERBS = {
+  blocks: 'blocks',
+  relates: 'relates to',
+  duplicates: 'duplicates',
+}
+
+/** "#3, #5" for a list of task ids. */
+export function taskIdList(ids) {
+  return (ids ?? []).map((id) => `#${id}`).join(', ')
+}
+
 export const INBOX_REASON_LABELS = {
   question: 'Question for you',
   blocked: 'Blocked',
@@ -452,6 +491,9 @@ export const EVENT_LABELS = {
   file_removed: 'removed a file',
   context_added: 'added a context link',
   context_removed: 'removed a context link',
+  linked: 'linked a task',
+  unlinked: 'removed a task link',
+  seen_again: 'filed it again',
 }
 
 // Documents. Mirrors DocKind in backend/app/models.py.

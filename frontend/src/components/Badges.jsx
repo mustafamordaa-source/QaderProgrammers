@@ -4,6 +4,8 @@ import {
   COMMENT_KIND_STYLES,
   DEPLOY_LABELS,
   DEPLOY_STYLES,
+  KIND_LABELS,
+  KIND_STYLES,
   POINT_LABELS,
   PRIORITY_LABELS,
   ROLE_LABELS,
@@ -37,6 +39,39 @@ export function StatusBadge({ status }) {
   return (
     <span className={`${pill} bg-surface-raised ${STATUS_STYLES[status] ?? 'border-hairline text-ink-secondary'}`}>
       {STATUS_LABELS[status] ?? status}
+    </span>
+  )
+}
+
+/** Task kind. `hideTask` skips the plain "Task" kind where space is short. */
+export function KindBadge({ kind, hideTask = false }) {
+  if (!kind || (hideTask && kind === 'task')) return null
+  return (
+    <span className={`${pill} ${KIND_STYLES[kind] ?? KIND_STYLES.task}`} title="Kind">
+      {KIND_LABELS[kind] ?? kind}
+    </span>
+  )
+}
+
+/** Open tasks that block this one. Claim and start stay refused until they close. */
+export function BlockedBadge({ ids }) {
+  if (!ids?.length) return null
+  const list = ids.map((id) => `#${id}`).join(', ')
+  return (
+    <span
+      className={`${pill} border-critical/40 text-critical`}
+      title={`Blocked by open task ${list}`}
+    >
+      Blocked by {list}
+    </span>
+  )
+}
+
+/** A webhook change: the `github` account with actor kind `system`. */
+export function GitHubBadge() {
+  return (
+    <span className={`${pill} border-hairline bg-surface-raised text-ink-secondary`} title="Added by the GitHub webhook">
+      GitHub
     </span>
   )
 }

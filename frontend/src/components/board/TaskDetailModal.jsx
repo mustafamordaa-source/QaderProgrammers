@@ -1,17 +1,28 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import Modal from '../Modal'
 import { api, isVersionConflict } from '../../api/client'
 import {
+  BlockedBadge,
   DeployBadge,
+  KindBadge,
   OverdueBadge,
   PointsBadge,
   PriorityBadge,
   SideBadge,
   StatusBadge,
 } from '../Badges'
-import { hasLeadRights, isClosed, isReadOnlyUser, isWorkerOn } from '../../lib/constants'
+import {
+  assignablePeople,
+  hasLeadRights,
+  isClosed,
+  isReadOnlyUser,
+  isWorkerOn,
+} from '../../lib/constants'
 import { isOverdue } from '../../lib/format'
+import CreateTaskModal from './CreateTaskModal'
 import StatusActions from './detail/StatusActions'
+import LinksTab from './detail/LinksTab'
 import OverviewTab from './detail/OverviewTab'
 import CriteriaTab from './detail/CriteriaTab'
 import DiscussionTab from './detail/DiscussionTab'
@@ -24,6 +35,7 @@ import ContextTab from './detail/ContextTab'
 const TABS = [
   { key: 'overview', label: 'Overview' },
   { key: 'criteria', label: 'Criteria' },
+  { key: 'links', label: 'Links' },
   { key: 'discussion', label: 'Discussion' },
   { key: 'docs', label: 'Docs' },
   { key: 'files', label: 'Files' },
@@ -39,6 +51,11 @@ const CONFLICT_MESSAGE =
  * The full task view. Every write goes through `run`, which reloads the task
  * when the server answers 409 for a stale version, so the user always ends
  * up looking at the current state.
+ *
+ * `onOpenTask(id)` switches to another task (parent, subtask, linked task);
+ * without it the board opens with `?task=ID`. `onOtherChanged(task)` gets
+ * other tasks this view changed or created (a new subtask, a task it now
+ * blocks), so a board can keep their cards current.
  */
 export default function TaskDetailModal({
   task,
@@ -46,13 +63,18 @@ export default function TaskDetailModal({
   people,
   onClose,
   onChanged,
+  onOpenTask = null,
+  onOtherChanged = null,
   initialTab = 'overview',
   initialDoc = null,
+  initialNotice = null,
 }) {
+  const navigate = useNavigate()
   const [tab, setTab] = useState(initialTab)
   const [error, setError] = useState(null)
-  const [notice, setNotice] = useState(null)
+  const [notice, setNotice] = useState(initialNotice)
   const [busy, setBusy] = useState(false)
+  const [creatingSubtask, setCreatingSubtask] = useState(false)
 
   const isLead = hasLeadRights(user)
   const isReadOnly = isReadOnlyUser(user)
@@ -112,18 +134,80 @@ export default function TaskDetailModal({
     files: task.files?.length ?? 0,
     context: task.context?.length ?? 0,
     history: task.events?.length ?? 0,
+    links: (task.links?.length ?? 0) + (task.children?.length ?? 0) + (task.parent_id ? 1 : 0),
   }
 
-  const ctx = { task, user, people, isLead, isReadOnly, isWorker, closed, busy, run, reload: refresh }
+  function openTask(id, message = null) {
+    if (onOpenTask) onOpenTask(id, message)
+    else navigate(`/board?task=${id}`)
+  }
+
+  // Viewers read only; everyone else may file a task, so a subtask too.
+  const canCreate = !isReadOnly && !closed && !task.parent_id
+
+  async function createSubtask(payload) {
+    const created = await api.createTask(payload)
+    if (created.duplicate_of_existing) {
+      onOtherChanged?.(created)
+      openTask(created.id, `An open task already covers this: #${created.id}. It is open now instead of a new one.`)
+      return created
+    }
+    onOtherChanged?.(created)
+    await refresh()
+    setError(null)
+    setNotice(
+      created.status === 'backlog' || created.status === 'proposed'
+        ? `Subtask #${created.id} is in the ${created.status === 'backlog' ? 'backlog' : 'Triage column'}. A lead will triage it.`
+        : `Subtask #${created.id} created.`,
+    )
+    return created
+  }
+
+  const ctx = {
+    task,
+    user,
+    people,
+    isLead,
+    isReadOnly,
+    isWorker,
+    closed,
+    busy,
+    run,
+    reload: refresh,
+    openTask,
+    onOtherChanged,
+    startSubtask: canCreate ? () => setCreatingSubtask(true) : null,
+  }
 
   return (
     <Modal title={`Task #${task.id}`} onClose={onClose} size="xl">
+      {task.parent_id && (
+        <button
+          type="button"
+          onClick={() => openTask(task.parent_id)}
+          className="mb-1 inline-flex max-w-full items-center gap-1 text-xs text-ink-secondary underline-offset-2 hover:text-ink hover:underline"
+        >
+          ↳ Subtask of #{task.parent_id}
+          {task.parent?.title && (
+            <span dir="auto" className="truncate">
+              {task.parent.title}
+            </span>
+          )}
+        </button>
+      )}
       <h3 dir="auto" className="break-words text-lg font-semibold leading-snug">
         {task.title}
       </h3>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         <StatusBadge status={task.status} />
+        <KindBadge kind={task.kind} />
+        <BlockedBadge ids={task.blocked_by} />
+        {task.children_total > 0 && (
+          <span className="tabular inline-flex items-center rounded-full border border-hairline px-2 py-0.5 text-[11px] font-medium text-ink-secondary">
+            {task.children_total - task.children_open}/{task.children_total} subtasks
+          </span>
+        )}
         <SideBadge side={task.side} />
         <PointsBadge points={task.points} withLabel />
         <PriorityBadge priority={task.priority} />
@@ -180,6 +264,7 @@ export default function TaskDetailModal({
       <div role="tabpanel" className="pt-4">
         {tab === 'overview' && <OverviewTab ctx={ctx} />}
         {tab === 'criteria' && <CriteriaTab ctx={ctx} criteria={criteria} />}
+        {tab === 'links' && <LinksTab ctx={ctx} />}
         {tab === 'discussion' && <DiscussionTab ctx={ctx} comments={comments} />}
         {tab === 'docs' && <DocsTab ctx={ctx} initialSlug={initialDoc} />}
         {tab === 'files' && <FilesTab ctx={ctx} />}
@@ -187,6 +272,20 @@ export default function TaskDetailModal({
         {tab === 'git' && <GitTab ctx={ctx} links={gitLinks} />}
         {tab === 'history' && <HistoryTab events={task.events ?? []} people={people} />}
       </div>
+
+      {creatingSubtask && (
+        <CreateTaskModal
+          isLead={isLead}
+          programmers={assignablePeople(people)}
+          preset={{
+            parent: { id: task.id, title: task.title, status: task.status, kind: task.kind },
+            side: task.side,
+            tags: task.tags,
+          }}
+          onClose={() => setCreatingSubtask(false)}
+          onCreate={createSubtask}
+        />
+      )}
     </Modal>
   )
 }
