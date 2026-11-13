@@ -9,6 +9,7 @@ import {
 } from '../../../lib/constants'
 import { formatDateTime } from '../../../lib/format'
 import { linkButton, primaryButton, secondaryButton, smallInputClass } from './ui'
+import MentionTextarea, { MentionHint } from './MentionTextarea'
 
 const PARKABLE = ['backlog', 'to_do', 'in_progress', 'in_review']
 
@@ -25,7 +26,7 @@ function handbackProblem(kind, body) {
 
 /** Reply box under a top-level comment. Answers resolve the question. */
 function ReplyForm({ ctx, parent, onDone }) {
-  const { task, busy, run } = ctx
+  const { task, user, people, busy, run } = ctx
   const isOpenQuestion = parent.kind === 'question' && !parent.resolved_at
   const [kind, setKind] = useState(isOpenQuestion ? 'answer' : 'note')
   const [body, setBody] = useState('')
@@ -51,7 +52,8 @@ function ReplyForm({ ctx, parent, onDone }) {
           ))}
         </div>
       )}
-      <textarea
+      <MentionTextarea
+        id={`reply-${parent.id}`}
         aria-label="Reply"
         rows={3}
         dir="auto"
@@ -59,9 +61,12 @@ function ReplyForm({ ctx, parent, onDone }) {
         required
         maxLength={20000}
         value={body}
-        onChange={(e) => setBody(e.target.value)}
+        onChange={setBody}
+        people={people}
+        user={user}
         className={smallInputClass}
       />
+      <MentionHint />
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onDone} className={secondaryButton}>Cancel</button>
         <button type="submit" disabled={busy || !body.trim()} className={primaryButton}>
@@ -221,17 +226,21 @@ function Composer({ ctx }) {
         </label>
       )}
 
-      <textarea
+      <MentionTextarea
+        id="comment-body"
         aria-label="Comment"
         rows={kind === 'handback' ? 8 : 3}
         dir="auto"
         required
         maxLength={20000}
         value={body}
-        onChange={(e) => setBody(e.target.value)}
-        placeholder={kind === 'question' ? 'What do you need to know?' : 'Write a comment'}
+        onChange={setBody}
+        people={people}
+        user={user}
+        placeholder={kind === 'question' ? 'What do you need to know?' : 'Write a comment. Type @ to mention someone.'}
         className={`${smallInputClass} ${kind === 'handback' ? 'font-mono text-xs' : ''}`}
       />
+      <MentionHint />
       {kind === 'handback' && (
         <p className="text-xs text-ink-muted">
           Summary, Checks run and Left need text. The Summary line replaces the task summary.

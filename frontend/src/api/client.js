@@ -1,4 +1,5 @@
-// Thin fetch wrapper. The dev server proxies /auth, /tasks, /users, /kpi and /library to the
+// Thin fetch wrapper. The dev server proxies /auth, /tasks, /users, /kpi, /library and
+// /notifications to the
 // backend, so a relative base URL works without CORS in development; set
 // VITE_API_URL to point a production build at a different origin.
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -178,6 +179,19 @@ export const api = {
     request(`/users/${id}/password`, { method: 'POST', body: { password } }),
   botTokens: (id) => request(`/users/${id}/tokens`),
   issueBotToken: (id, payload) => request(`/users/${id}/tokens`, { method: 'POST', body: payload }),
+
+  // Notifications. Preferences and the test email need a browser login.
+  notifications: ({ unread, limit } = {}) =>
+    request('/notifications', { params: { unread: unread ? 'true' : undefined, limit } }),
+  notificationCount: () => request('/notifications/count'),
+  markNotificationsRead: (ids) => request('/notifications/read', { method: 'POST', body: { ids } }),
+  markAllNotificationsRead: () => request('/notifications/read', { method: 'POST', body: { all: true } }),
+  notificationPreferences: () => request('/notifications/preferences'),
+  updateNotificationPreferences: (payload) =>
+    request('/notifications/preferences', { method: 'PATCH', body: payload }),
+  sendTestEmail: () => request('/notifications/test', { method: 'POST' }),
+  // Admins only.
+  emailSenderStatus: () => request('/notifications/status'),
 
   teamKpi: (range) => request('/kpi/team', { params: range }),
   myKpi: (range) => request('/kpi/me', { params: range }),

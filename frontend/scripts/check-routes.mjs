@@ -38,7 +38,7 @@ if (routes.length === 0 || proxies.length === 0) {
 
 // Every top-level path the backend serves. The dev proxy must cover each one,
 // so the collision check below covers them all.
-const API_PREFIXES = ['/auth', '/tasks', '/users', '/kpi', '/library', '/health']
+const API_PREFIXES = ['/auth', '/tasks', '/users', '/kpi', '/library', '/notifications', '/health']
 
 const unproxied = API_PREFIXES.filter((prefix) => !proxies.includes(prefix))
 if (unproxied.length > 0) {

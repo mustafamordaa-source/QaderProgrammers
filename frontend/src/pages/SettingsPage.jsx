@@ -4,12 +4,14 @@ import { useAuth } from '../auth/AuthContext'
 import { TOKEN_MAX_DAYS } from '../lib/constants'
 import { formatDateTime } from '../lib/format'
 import { NewTokenPanel, TOKEN_STATE_STYLES, tokenState } from '../components/TokenParts'
+import NotificationSettings from '../components/settings/NotificationSettings'
+import EmailSenderStatus from '../components/settings/EmailSenderStatus'
 
 const inputClass =
   'mt-1.5 w-full rounded-lg border border-hairline bg-surface-raised px-3 py-2 text-sm outline-none focus:border-series1'
 
 export default function SettingsPage() {
-  const { isReadOnly } = useAuth()
+  const { isReadOnly, isAdmin } = useAuth()
   const [tokens, setTokens] = useState([])
   const [scopes, setScopes] = useState({})
   const [loading, setLoading] = useState(true)
@@ -80,11 +82,17 @@ export default function SettingsPage() {
     <>
       <div className="mb-5">
         <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-0.5 text-sm text-ink-secondary">
-          Personal API tokens let your AI agents work in TaskFlow as you, limited to the scopes
-          you pick. An agent must name itself in the X-Agent header.
-        </p>
+        <p className="mt-0.5 text-sm text-ink-secondary">Your notifications and your API tokens.</p>
       </div>
+
+      <NotificationSettings />
+      {isAdmin && <EmailSenderStatus />}
+
+      <h2 className="text-base font-semibold tracking-tight">API tokens</h2>
+      <p className="mb-4 mt-0.5 text-sm text-ink-secondary">
+        Personal API tokens let your AI agents work in TaskFlow as you, limited to the scopes
+        you pick. An agent must name itself in the X-Agent header.
+      </p>
 
       {created && <NewTokenPanel token={created} onDismiss={() => setCreated(null)} />}
 

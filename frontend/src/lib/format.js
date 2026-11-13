@@ -89,3 +89,18 @@ export function initials(name) {
     .map((part) => part[0]?.toUpperCase() ?? '')
     .join('')
 }
+
+const RELATIVE = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+
+/** "5 minutes ago", "yesterday"; falls back to the date past a week. */
+export function formatRelative(value, now = Date.now()) {
+  const date = asUtcDate(value)
+  if (!date) return '—'
+  const seconds = Math.round((date.getTime() - now) / 1000)
+  const abs = Math.abs(seconds)
+  if (abs < 45) return 'just now'
+  if (abs < 3600) return RELATIVE.format(Math.round(seconds / 60), 'minute')
+  if (abs < 86_400) return RELATIVE.format(Math.round(seconds / 3600), 'hour')
+  if (abs < 7 * 86_400) return RELATIVE.format(Math.round(seconds / 86_400), 'day')
+  return formatDate(value)
+}

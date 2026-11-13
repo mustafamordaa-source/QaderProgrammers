@@ -354,6 +354,53 @@ export const INBOX_REASON_LABELS = {
   triage: 'Waiting for triage',
 }
 
+// Notification kinds. Mirrors NotifyKind in backend/app/models.py; the verbs
+// match KIND_TEXT in backend/app/mailer.py so the bell and the email agree.
+export const NOTIFY_KIND_LABELS = {
+  assigned: 'Assigned',
+  question: 'Question',
+  answered: 'Answered',
+  mention: 'Mention',
+  review: 'Review',
+  rejected: 'Sent back',
+  approved: 'Approved',
+  proposal: 'Proposal',
+}
+
+export const NOTIFY_KIND_VERBS = {
+  assigned: 'assigned you',
+  question: 'asked you a question',
+  answered: 'answered your question',
+  mention: 'mentioned you',
+  review: 'sent work for review',
+  rejected: 'sent your work back',
+  approved: 'approved your work',
+  proposal: 'proposed a task',
+}
+
+// Settings checkboxes: what each email kind means to the reader.
+export const NOTIFY_KIND_PREF_LABELS = {
+  assigned: 'Assigned to me',
+  question: 'Asked me a question',
+  answered: 'My question answered',
+  mention: 'Mentioned me',
+  review: 'Work waiting for review (leads)',
+  rejected: 'My work sent back',
+  approved: 'My work approved',
+  proposal: 'New proposals (leads)',
+}
+
+export const NOTIFY_KIND_STYLES = {
+  assigned: 'border-series1/40 text-series1',
+  question: 'border-warning/50 text-warning',
+  answered: 'border-good/40 text-good',
+  mention: 'border-series2/40 text-series2',
+  review: 'border-series3/40 text-series3',
+  rejected: 'border-critical/40 text-critical',
+  approved: 'border-good/40 text-good',
+  proposal: 'border-series2/40 text-series2',
+}
+
 // The most an API token may live. Mirrors settings.api_token_max_days.
 export const TOKEN_MAX_DAYS = 90
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, isVersionConflict } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import KanbanBoard from '../components/board/KanbanBoard'
@@ -29,6 +30,9 @@ export default function BoardPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
+  // `/board?task=ID` opens that task, so links in notification emails land on it.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const taskParam = searchParams.get('task')
 
   const [mine, setMine] = useState(false)
   const [side, setSide] = useState('')
@@ -90,6 +94,51 @@ export default function BoardPage() {
       setSelected(await api.task(task.id))
     } catch (err) {
       setError(err.message)
+    }
+  }
+
+  // Open the task named in the URL, on load and whenever the param changes
+  // (the header bell navigates here with it).
+  useEffect(() => {
+    if (!taskParam) return undefined
+    const id = Number(taskParam)
+    if (!Number.isInteger(id) || id <= 0) {
+      setSearchParams((params) => {
+        params.delete('task')
+        return params
+      }, { replace: true })
+      return undefined
+    }
+    let cancelled = false
+    api
+      .task(id)
+      .then((task) => {
+        if (!cancelled) setSelected(task)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setError(
+          err.status === 404 || err.status === 403
+            ? `Task #${id} does not exist or you cannot see it.`
+            : err.message,
+        )
+        setSearchParams((params) => {
+          params.delete('task')
+          return params
+        }, { replace: true })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [taskParam, setSearchParams])
+
+  function closeTask() {
+    setSelected(null)
+    if (searchParams.has('task')) {
+      setSearchParams((params) => {
+        params.delete('task')
+        return params
+      }, { replace: true })
     }
   }
 
@@ -301,7 +350,7 @@ export default function BoardPage() {
           task={selected}
           user={user}
           people={people}
-          onClose={() => setSelected(null)}
+          onClose={closeTask}
           onChanged={applyUpdate}
         />
       )}

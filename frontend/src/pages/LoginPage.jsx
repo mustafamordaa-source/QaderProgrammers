@@ -6,6 +6,9 @@ export default function LoginPage() {
   const { user, loading, login } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
+  // Keep the query string too, so an email link like /board?task=12 survives sign-in.
+  const from = location.state?.from
+  const returnTo = from?.pathname ? `${from.pathname}${from.search ?? ''}` : '/board'
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -13,7 +16,7 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false)
 
   if (loading) return null
-  if (user) return <Navigate to={location.state?.from?.pathname ?? '/board'} replace />
+  if (user) return <Navigate to={returnTo} replace />
 
   async function handleSubmit(event) {
     event.preventDefault()
@@ -21,7 +24,7 @@ export default function LoginPage() {
     setSubmitting(true)
     try {
       await login(email.trim(), password)
-      navigate(location.state?.from?.pathname ?? '/board', { replace: true })
+      navigate(returnTo, { replace: true })
     } catch (err) {
       setError(err.message)
     } finally {

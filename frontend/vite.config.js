@@ -19,6 +19,7 @@ export default defineConfig({
       '/users': 'http://127.0.0.1:8000',
       '/kpi': 'http://127.0.0.1:8000',
       '/library': 'http://127.0.0.1:8000',
+      '/notifications': 'http://127.0.0.1:8000',
       '/health': 'http://127.0.0.1:8000',
     },
   },
