@@ -5,13 +5,21 @@ name: taskflow
 # name, both container names and the network name as they are.
 services:
   api:
-    build: ./backend
+    build:
+      context: ./backend
+      target: runtime
     container_name: taskflow_api
     # The server keeps the real secrets here. Set TASKFLOW_ENV_FILE for a local test.
     env_file: ${TASKFLOW_ENV_FILE:-/opt/docker/taskflow/.env}
+    environment:
+      # Turns on the start-up checks (refuses a weak SECRET_KEY). Set here, not
+      # in the env file, so a missing line cannot switch them off.
+      APP_ENV: ${TASKFLOW_APP_ENV:-production}
     volumes:
       - taskflow_data:/data
     restart: unless-stopped
+    # The staging server is short on memory; keep the hub small.
+    mem_limit: 256m
     networks: [qader]
 
   web:
@@ -19,6 +27,7 @@ services:
     container_name: taskflow_web
     depends_on: [api]
     restart: unless-stopped
+    mem_limit: 64m
     networks: [qader]
 
 volumes:
