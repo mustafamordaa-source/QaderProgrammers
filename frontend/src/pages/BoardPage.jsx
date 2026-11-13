@@ -9,7 +9,7 @@ import TriageBar from '../components/board/TriageBar'
 import BoardFilters from '../components/board/BoardFilters'
 import BoardSkeleton from '../components/board/BoardSkeleton'
 import { useBoardPrefs, useFillHeight, useMediaQuery } from '../components/board/useBoardPrefs'
-import { assignablePeople } from '../lib/constants'
+import { assignablePeople, parseTaskRef, taskKey } from '../lib/constants'
 
 /** Wait until the value stops changing, so typing does not fire a request per key. */
 function useDebounced(value, delay = 300) {
@@ -37,6 +37,8 @@ export default function BoardPage() {
   // `/board?task=ID` opens that task, so links in notification emails land on it.
   const [searchParams, setSearchParams] = useSearchParams()
   const taskParam = searchParams.get('task')
+  // The task openTask loaded itself, so the URL effect does not load it twice.
+  const openedFromBoard = useRef(null)
 
   const [mine, setMine] = useState(false)
   const [side, setSide] = useState('')
@@ -124,6 +126,14 @@ export default function BoardPage() {
     // current task stays up until the new one arrives, unless the board has it.
     const quick = typeof taskOrId === 'number' ? tasks.find((t) => t.id === id) : taskOrId
     if (quick) setSelected(quick)
+    // Put the task in the URL, so the address bar is a link to share and Back closes it.
+    openedFromBoard.current = id
+    if (Number(searchParams.get('task')) !== id) {
+      setSearchParams((params) => {
+        params.set('task', String(id))
+        return params
+      })
+    }
     try {
       setSelected(await api.task(id))
     } catch (err) {
@@ -134,9 +144,17 @@ export default function BoardPage() {
   // Open the task named in the URL, on load and whenever the param changes
   // (the header bell navigates here with it).
   useEffect(() => {
-    if (!taskParam) return undefined
-    const id = Number(taskParam)
-    if (!Number.isInteger(id) || id <= 0) {
+    if (!taskParam) {
+      // Back (or a link without a task) closes the dialog.
+      openedFromBoard.current = null
+      setSelected(null)
+      setSelectedNotice(null)
+      return undefined
+    }
+    const id = parseTaskRef(taskParam)
+    // openTask already loaded it; the URL only caught up.
+    if (id !== null && openedFromBoard.current === id) return undefined
+    if (id === null) {
       setSearchParams((params) => {
         params.delete('task')
         return params
@@ -153,7 +171,7 @@ export default function BoardPage() {
         if (cancelled) return
         setError(
           err.status === 404 || err.status === 403
-            ? `Task #${id} does not exist or you cannot see it.`
+            ? `Task ${taskKey(id)} does not exist or you cannot see it.`
             : err.message,
         )
         setSearchParams((params) => {

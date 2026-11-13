@@ -359,3 +359,14 @@ class TestPoints:
     def test_points_are_visible_to_the_assignee(self, client, auth, alice, make_task):
         task = make_task(assignee_1=alice, points=8)
         assert client.get(f"/tasks/{task.id}", headers=auth(alice)).json()["points"] == 8
+
+
+def test_search_finds_a_task_by_its_hub_key(client, auth, leader, make_task):
+    target = make_task(title="Export the report as CSV")
+    make_task(title="Something else")
+    h = auth(leader)
+    for q in (f"HUB-{target.id}", f"hub{target.id}", f"#{target.id}", str(target.id), f"hub {target.id}"):
+        ids = [t["id"] for t in client.get("/tasks", params={"q": q}, headers=h).json()]
+        assert target.id in ids, q
+    ids = [t["id"] for t in client.get("/tasks", params={"q": "csv"}, headers=h).json()]
+    assert ids == [target.id]

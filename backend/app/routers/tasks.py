@@ -121,6 +121,9 @@ def _get_task_or_404(db: Session, task_id: int) -> Task:
     return task
 
 
+TASK_REF_RE = re.compile(r"(?:hub[-\s]?|#)?(\d{1,9})", re.IGNORECASE)
+
+
 def _can_see(task: Task, user: User) -> bool:
     if user.is_lead:
         return True
@@ -597,7 +600,12 @@ def list_tasks(
         stmt = stmt.where(Task.side.in_(list(user.sides or [])))
     if q:
         like = f"%{q.strip()}%"
-        stmt = stmt.where(or_(Task.title.ilike(like), Task.description.ilike(like), Task.summary.ilike(like)))
+        found = [Task.title.ilike(like), Task.description.ilike(like), Task.summary.ilike(like)]
+        # "HUB-12", "hub12", "#12" or "12" also finds task 12 itself.
+        by_id = TASK_REF_RE.fullmatch(q.strip())
+        if by_id:
+            found.append(Task.id == int(by_id.group(1)))
+        stmt = stmt.where(or_(*found))
 
     if tag or ready:
         tasks = [

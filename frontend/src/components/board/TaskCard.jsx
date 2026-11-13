@@ -17,6 +17,7 @@ import {
   STATUS_SHORT_LABELS,
   canClaim,
   claimIsLive,
+  taskKey,
 } from '../../lib/constants'
 import { formatDate, formatDateTime, initials, isOverdue } from '../../lib/format'
 import {
@@ -308,7 +309,7 @@ export default function TaskCard({
 
       {compact ? (
         <div className="mt-1.5 flex items-center gap-2">
-          <span className="tabular text-[11px] text-ink-muted">#{task.id}</span>
+          <span className="tabular text-[11px] text-ink-muted">{taskKey(task.id)}</span>
           {showStatus && (
             <span className="text-[11px] text-ink-secondary">{STATUS_SHORT_LABELS[task.status] ?? task.status}</span>
           )}
