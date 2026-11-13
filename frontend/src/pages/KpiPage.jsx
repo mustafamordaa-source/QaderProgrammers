@@ -64,7 +64,7 @@ function Headline({ report }) {
 }
 
 export default function KpiPage() {
-  const { isLeader, user } = useAuth()
+  const { isLead, user } = useAuth()
 
   const [range, setRange] = useState(() => rangeForDays(90))
   const [preset, setPreset] = useState(90)
@@ -78,14 +78,14 @@ export default function KpiPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      setReport(isLeader ? await api.teamKpi(range) : await api.myKpi(range))
+      setReport(isLead ? await api.teamKpi(range) : await api.myKpi(range))
       setError(null)
     } catch (err) {
       setError(err.message)
     } finally {
       setLoading(false)
     }
-  }, [isLeader, range])
+  }, [isLead, range])
 
   useEffect(() => {
     load()
@@ -134,10 +134,10 @@ export default function KpiPage() {
     <>
       <div className="mb-5">
         <h1 className="text-xl font-semibold tracking-tight">
-          {isLeader ? 'Team metrics' : 'My metrics'}
+          {isLead ? 'Team metrics' : 'My metrics'}
         </h1>
         <p className="mt-0.5 text-sm text-ink-secondary">
-          {isLeader
+          {isLead
             ? 'Everything here is derived from the task event log.'
             : `Your delivery metrics, ${user.name}. Derived from your task history.`}
         </p>
@@ -147,11 +147,11 @@ export default function KpiPage() {
         <DateRangeFilter activePreset={preset} onPreset={choosePreset} onCustom={chooseCustom} />
         <p className="mt-2 text-xs text-ink-muted">
           {formatDate(report.range_start)} – {formatDate(report.range_end)}
-          {' · '}Volume is difficulty-weighted: the leader rates each task 1–13 when
+          {' · '}Volume is difficulty-weighted: a lead rates each task 1–13 when
           creating it.
-          {isLeader && (
+          {isLead && (
             <>
-              {' '}A task shared by two programmers counts once for the team and in full
+              {' '}A task shared by two members counts once for the team and in full
               for each of them.
             </>
           )}
@@ -164,7 +164,7 @@ export default function KpiPage() {
         </p>
       )}
 
-      {isLeader && report.programmers?.length > 0 && (
+      {isLead && report.programmers?.length > 0 && (
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <span className="text-xs text-ink-secondary">Viewing:</span>
           <button
@@ -214,7 +214,7 @@ export default function KpiPage() {
         />
       </div>
 
-      {isLeader && report.programmers?.length > 0 && (
+      {isLead && report.programmers?.length > 0 && (
         <div className="mt-3">
           <ProgrammerComparison
             reports={report.programmers}

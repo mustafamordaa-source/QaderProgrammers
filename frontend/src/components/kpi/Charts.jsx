@@ -12,6 +12,20 @@ import {
 import ChartCard from './ChartCard'
 import { EmptyState, SERIES_1, Tooltip, axisProps, gridProps } from './chartTheme'
 import { STATUS_SHORT_LABELS } from '../../lib/constants'
+
+// The order the API's status keys are shown in. Keys the API adds later
+// still show, after these.
+const DWELL_ORDER = ['to_do', 'in_progress', 'in_review', 'blocked', 'needs_confirm']
+const OPEN_ORDER = ['backlog', 'to_do', 'in_progress', 'in_review', 'blocked', 'needs_confirm']
+
+function ordered(record, order) {
+  const entries = Object.entries(record ?? {})
+  const rank = (key) => {
+    const index = order.indexOf(key)
+    return index === -1 ? order.length : index
+  }
+  return entries.sort(([a], [b]) => rank(a) - rank(b))
+}
 import { formatHours, formatWeekKey } from '../../lib/format'
 
 const HEIGHT = 220
@@ -133,7 +147,7 @@ export function CycleTimeTrend({ perWeek }) {
  * bars run horizontally and each one is direct-labelled.
  */
 export function TimeInStatusChart({ perStatus }) {
-  const data = Object.entries(perStatus)
+  const data = ordered(perStatus, DWELL_ORDER)
     .filter(([, hours]) => hours !== null && hours !== undefined)
     .map(([status, hours]) => ({
       status,
@@ -160,7 +174,7 @@ export function TimeInStatusChart({ perStatus }) {
             margin={{ top: 4, right: 48, bottom: 0, left: 8 }}
           >
             <XAxis type="number" hide />
-            <YAxis type="category" dataKey="label" width={56} {...axisProps} />
+            <YAxis type="category" dataKey="label" width={64} {...axisProps} />
             <RechartsTooltip
               cursor={{ fill: 'var(--surface-2)' }}
               content={<Tooltip formatter={formatHours} />}
@@ -185,7 +199,7 @@ export function TimeInStatusChart({ perStatus }) {
 }
 
 /**
- * Per-programmer comparison. One measure at a time rather than several series
+ * Per-member comparison. One measure at a time rather than several series
  * side by side: the measures have different units, and a single scale keeps the
  * comparison honest.
  */
@@ -234,10 +248,10 @@ export function ProgrammerComparison({ reports, measure, onMeasureChange, onSele
 
   return (
     <ChartCard
-      title="By programmer"
+      title="By member"
       subtitle="Select a name to see their full breakdown"
       table={{
-        columns: ['Programmer', spec.label],
+        columns: ['Member', spec.label],
         rows: data.map((row) => [row.label, spec.format(row.value)]),
       }}
     >
@@ -260,7 +274,7 @@ export function ProgrammerComparison({ reports, measure, onMeasureChange, onSele
       </div>
 
       {data.length === 0 ? (
-        <EmptyState>No programmers yet.</EmptyState>
+        <EmptyState>No members yet.</EmptyState>
       ) : (
         <ResponsiveContainer width="100%" height={Math.max(HEIGHT, data.length * 44)}>
           <BarChart
@@ -296,12 +310,12 @@ export function ProgrammerComparison({ reports, measure, onMeasureChange, onSele
 }
 
 /**
- * Current open work by stage. A plain list — five numbers don't need a plot.
+ * Current open work by stage. A plain list — six numbers don't need a plot.
  * The bar is sized by points, so a stage holding one 13-pointer reads as
  * heavier than one holding two 1-pointers.
  */
 export function OpenByStatus({ openByStatus, openPointsByStatus, openTotal, openPointsTotal }) {
-  const entries = Object.entries(openByStatus)
+  const entries = ordered(openByStatus, OPEN_ORDER)
   const max = Math.max(1, ...entries.map(([status]) => openPointsByStatus?.[status] ?? 0))
 
   return (
@@ -316,7 +330,7 @@ export function OpenByStatus({ openByStatus, openPointsByStatus, openTotal, open
           const points = openPointsByStatus?.[status] ?? 0
           return (
             <li key={status} className="flex items-center gap-3">
-              <span className="w-14 shrink-0 text-xs text-ink-secondary">
+              <span className="w-16 shrink-0 text-xs text-ink-secondary">
                 {STATUS_SHORT_LABELS[status] ?? status}
               </span>
               <span className="h-2 flex-1 overflow-hidden rounded-full bg-surface-raised">

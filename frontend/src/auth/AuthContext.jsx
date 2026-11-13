@@ -1,5 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { api, getToken, setToken } from '../api/client'
+import {
+  hasAdminRights,
+  hasLeadRights,
+  hasMemberRights,
+  isReadOnlyUser,
+  rolesOf,
+} from '../lib/constants'
 
 const AuthContext = createContext(null)
 
@@ -38,6 +45,11 @@ export function AuthProvider({ children }) {
     return result.user
   }, [])
 
+  // Pick up changes to the signed-in person, such as roles an admin edited.
+  const refreshUser = useCallback(async () => {
+    setUser(await api.me())
+  }, [])
+
   const logout = useCallback(() => {
     setToken(null)
     setUser(null)
@@ -49,9 +61,15 @@ export function AuthProvider({ children }) {
       loading,
       login,
       logout,
-      isLeader: user?.role === 'leader',
+      refreshUser,
+      // Rights add up across `roles`; the old single `role` is the fallback.
+      roles: rolesOf(user),
+      isAdmin: hasAdminRights(user),
+      isLead: hasLeadRights(user),
+      isMember: hasMemberRights(user),
+      isReadOnly: Boolean(user) && isReadOnlyUser(user),
     }),
-    [user, loading, login, logout],
+    [user, loading, login, logout, refreshUser],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

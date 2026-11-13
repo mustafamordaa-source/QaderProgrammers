@@ -10,13 +10,16 @@ export default defineConfig({
     // These prefixes are claimed by the backend, so no client-side route may
     // reuse one: Vite matches by prefix and would hand a hard page load (or a
     // refresh, or a pasted link) to the API instead of the app. The client
-    // routes are deliberately named out of the way — /board, /metrics, /people,
-    // /login. Adding an API prefix here means checking it against those.
+    // routes are deliberately named out of the way — /board, /inbox, /documents, /guide,
+    // /metrics, /people, /settings, /login. Adding an API prefix here means checking it
+    // against those (npm run check:routes does it).
     proxy: {
       '/auth': 'http://127.0.0.1:8000',
       '/tasks': 'http://127.0.0.1:8000',
       '/users': 'http://127.0.0.1:8000',
       '/kpi': 'http://127.0.0.1:8000',
+      '/library': 'http://127.0.0.1:8000',
+      '/notifications': 'http://127.0.0.1:8000',
       '/health': 'http://127.0.0.1:8000',
     },
   },

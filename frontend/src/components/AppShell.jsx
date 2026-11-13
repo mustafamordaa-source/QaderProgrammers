@@ -1,7 +1,10 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { initials } from '../lib/format'
+import { ROLE_LABELS } from '../lib/constants'
 import ThemeToggle from './ThemeToggle'
+import NotificationBell from './notifications/NotificationBell'
+import { NotificationsProvider } from './notifications/NotificationsContext'
 
 function navClass({ isActive }) {
   return [
@@ -11,56 +14,71 @@ function navClass({ isActive }) {
 }
 
 export default function AppShell() {
-  const { user, logout, isLeader } = useAuth()
+  const { user, logout, isLead, roles } = useAuth()
 
   return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-20 border-b border-hairline bg-surface/90 backdrop-blur">
-        <div className="mx-auto flex max-w-[1400px] items-center gap-4 px-4 py-3 sm:px-6">
-          <span className="text-base font-semibold tracking-tight">TaskFlow</span>
+    <NotificationsProvider>
+      <div className="min-h-screen">
+        <header className="sticky top-0 z-20 border-b border-hairline bg-surface/90 backdrop-blur">
+          <div className="mx-auto flex max-w-[1400px] items-center gap-4 px-4 py-3 sm:px-6">
+            <span className="text-base font-semibold tracking-tight">TaskFlow</span>
 
-          <nav className="flex items-center gap-1">
-            <NavLink to="/board" className={navClass}>
-              Board
-            </NavLink>
-            <NavLink to="/metrics" className={navClass}>
-              {isLeader ? 'Team KPIs' : 'My KPIs'}
-            </NavLink>
-            {isLeader && (
-              <NavLink to="/people" className={navClass}>
-                People
+            <nav className="flex flex-wrap items-center gap-1">
+              <NavLink to="/board" className={navClass}>
+                Board
               </NavLink>
-            )}
-          </nav>
+              <NavLink to="/inbox" className={navClass}>
+                Inbox
+              </NavLink>
+              <NavLink to="/documents" className={navClass}>
+                Documents
+              </NavLink>
+              <NavLink to="/metrics" className={navClass}>
+                {isLead ? 'Team KPIs' : 'My KPIs'}
+              </NavLink>
+              {isLead && (
+                <NavLink to="/people" className={navClass}>
+                  People
+                </NavLink>
+              )}
+              <NavLink to="/settings" className={navClass}>
+                Settings
+              </NavLink>
+              <NavLink to="/guide" className={navClass}>
+                Guide
+              </NavLink>
+            </nav>
 
-          <div className="ml-auto flex items-center gap-3">
-            <ThemeToggle />
-            <div className="hidden text-right sm:block">
-              <div className="text-sm font-medium leading-tight">{user?.name}</div>
-              <div className="text-xs capitalize leading-tight text-ink-muted">
-                {user?.role}
+            <div className="ml-auto flex items-center gap-3">
+              <NotificationBell />
+              <ThemeToggle />
+              <div className="hidden text-right sm:block">
+                <div dir="auto" className="text-sm font-medium leading-tight">{user?.name}</div>
+                <div className="text-xs leading-tight text-ink-muted">
+                  {roles.map((role) => ROLE_LABELS[role] ?? role).join(' · ')}
+                </div>
               </div>
+              <span
+                aria-hidden="true"
+                className="grid h-8 w-8 place-items-center rounded-full bg-surface-raised text-xs font-semibold text-ink-secondary"
+              >
+                {initials(user?.name)}
+              </span>
+              <button
+                type="button"
+                onClick={logout}
+                className="rounded-lg border border-hairline px-3 py-1.5 text-sm text-ink-secondary transition hover:text-ink"
+              >
+                Sign out
+              </button>
             </div>
-            <span
-              aria-hidden="true"
-              className="grid h-8 w-8 place-items-center rounded-full bg-surface-raised text-xs font-semibold text-ink-secondary"
-            >
-              {initials(user?.name)}
-            </span>
-            <button
-              type="button"
-              onClick={logout}
-              className="rounded-lg border border-hairline px-3 py-1.5 text-sm text-ink-secondary transition hover:text-ink"
-            >
-              Sign out
-            </button>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <main className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6">
-        <Outlet />
-      </main>
-    </div>
+        <main className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6">
+          <Outlet />
+        </main>
+      </div>
+    </NotificationsProvider>
   )
 }

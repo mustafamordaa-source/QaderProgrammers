@@ -36,6 +36,19 @@ if (routes.length === 0 || proxies.length === 0) {
   process.exit(2)
 }
 
+// Every top-level path the backend serves. The dev proxy must cover each one,
+// so the collision check below covers them all.
+const API_PREFIXES = ['/auth', '/tasks', '/users', '/kpi', '/library', '/notifications', '/health']
+
+const unproxied = API_PREFIXES.filter((prefix) => !proxies.includes(prefix))
+if (unproxied.length > 0) {
+  console.error(
+    `check-routes: vite.config.js does not proxy ${unproxied.join(', ')}. ` +
+      'Add them to server.proxy so the dev server hands them to the API.',
+  )
+  process.exit(1)
+}
+
 const collisions = []
 for (const route of routes) {
   for (const prefix of proxies) {

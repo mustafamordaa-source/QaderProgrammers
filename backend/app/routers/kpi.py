@@ -46,7 +46,7 @@ def my_kpi(
 ) -> KpiReport:
     start, end = _resolve(range_start, range_end)
     # A leader asking for "me" gets the team view, since they own no tasks.
-    scope = None if user.role is Role.leader else user
+    scope = None if user.is_lead else user
     return build_report(db, user=scope, range_start=start, range_end=end)
 
 
@@ -59,7 +59,7 @@ def programmer_kpi(
     range_end: datetime | None = RangeEnd,
 ) -> KpiReport:
     target = db.get(User, user_id)
-    if target is None or target.role is not Role.programmer:
+    if target is None or not target.is_member:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Programmer not found")
     start, end = _resolve(range_start, range_end)
     return build_report(db, user=target, range_start=start, range_end=end)

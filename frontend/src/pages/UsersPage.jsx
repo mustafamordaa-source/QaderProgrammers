@@ -4,19 +4,10 @@ import { useAuth } from '../auth/AuthContext'
 import UserFormModal from '../components/users/UserFormModal'
 import PasswordResetModal from '../components/users/PasswordResetModal'
 import DeactivateModal from '../components/users/DeactivateModal'
+import BotTokensModal from '../components/users/BotTokensModal'
 import { formatDate, initials } from '../lib/format'
-
-function RoleBadge({ role }) {
-  return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-        role === 'leader' ? 'border-series1/40 text-series1' : 'border-hairline text-ink-secondary'
-      }`}
-    >
-      {role === 'leader' ? 'Leader' : 'Programmer'}
-    </span>
-  )
-}
+import { RoleBadges } from '../components/Badges'
+import { SIDE_LABELS, isBot } from '../lib/constants'
 
 function StatusBadge({ active }) {
   return (
@@ -38,7 +29,8 @@ const actionClass =
   'rounded-md border border-hairline px-2.5 py-1 text-[11px] text-ink-secondary transition hover:text-ink'
 
 export default function UsersPage() {
-  const { user: currentUser, logout } = useAuth()
+  // Leads see the list; only admins change it.
+  const { user: currentUser, logout, refreshUser, isAdmin } = useAuth()
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -47,6 +39,7 @@ export default function UsersPage() {
   const [editing, setEditing] = useState(null)
   const [resetting, setResetting] = useState(null)
   const [deactivating, setDeactivating] = useState(null)
+  const [tokensFor, setTokensFor] = useState(null)
 
   const load = useCallback(async () => {
     try {
@@ -74,6 +67,8 @@ export default function UsersPage() {
 
   async function handleEdit(payload) {
     replace(await api.updateUser(editing.id, payload))
+    // Your own roles may have changed; the header and menus follow them.
+    if (editing.id === currentUser.id) await refreshUser()
   }
 
   async function handleReset(password) {
@@ -98,15 +93,18 @@ export default function UsersPage() {
           <p className="mt-0.5 text-sm text-ink-secondary">
             {activeCount} active {activeCount === 1 ? 'account' : 'accounts'} of {users.length}.
             Accounts are deactivated, never deleted, so task history stays intact.
+            {!isAdmin && ' Only an admin can add or change accounts.'}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setCreating(true)}
-          className="rounded-lg bg-series1 px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
-        >
-          Add person
-        </button>
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={() => setCreating(true)}
+            className="rounded-lg bg-series1 px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+          >
+            Add person or bot
+          </button>
+        )}
       </div>
 
       {error && (
@@ -122,10 +120,10 @@ export default function UsersPage() {
         <p className="text-sm text-ink-muted">Loading people…</p>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-hairline bg-surface">
-          <table className="w-full min-w-[720px] text-sm">
+          <table className="w-full min-w-[960px] text-sm">
             <thead>
               <tr className="border-b border-hairline text-left">
-                {['Name', 'Role', 'Status', 'Open tasks', 'Added', ''].map((column) => (
+                {['Name', 'Handle', 'Roles', 'Works on', 'Status', 'Open tasks', 'WIP', 'Added', ''].map((column) => (
                   <th
                     key={column}
                     className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-secondary"
@@ -138,6 +136,7 @@ export default function UsersPage() {
             <tbody>
               {users.map((row) => {
                 const isSelf = row.id === currentUser.id
+                const bot = isBot(row)
                 return (
                   <tr
                     key={row.id}
@@ -155,7 +154,7 @@ export default function UsersPage() {
                         </span>
                         <div className="min-w-0">
                           <div className="font-medium leading-tight">
-                            {row.name}
+                            <span dir="auto">{row.name}</span>
                             {isSelf && (
                               <span className="ml-1.5 text-[11px] font-normal text-ink-muted">
                                 (you)
@@ -168,8 +167,21 @@ export default function UsersPage() {
                         </div>
                       </div>
                     </td>
+                    <td className="px-4 py-3 text-xs text-ink-secondary">
+                      {row.handle ? <span dir="ltr">@{row.handle}</span> : <span className="text-ink-muted">—</span>}
+                      {row.github_login && (
+                        <div dir="ltr" className="text-[11px] text-ink-muted">
+                          GitHub: {row.github_login}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
-                      <RoleBadge role={row.role} />
+                      <RoleBadges user={row} />
+                    </td>
+                    <td className="px-4 py-3 text-xs text-ink-secondary">
+                      {row.sides?.length
+                        ? row.sides.map((side) => SIDE_LABELS[side] ?? side).join(', ')
+                        : <span className="text-ink-muted">—</span>}
                     </td>
                     <td className="px-4 py-3">
                       <StatusBadge active={row.is_active} />
@@ -177,41 +189,50 @@ export default function UsersPage() {
                     <td className="tabular px-4 py-3 text-ink-secondary">
                       {row.open_task_count}
                     </td>
+                    <td className="tabular px-4 py-3 text-ink-secondary">{row.wip_limit}</td>
                     <td className="px-4 py-3 text-xs text-ink-muted">
                       {formatDate(row.created_at)}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-wrap justify-end gap-1.5">
-                        <button type="button" className={actionClass} onClick={() => setEditing(row)}>
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className={actionClass}
-                          onClick={() => setResetting(row)}
-                        >
-                          Reset password
-                        </button>
-                        {row.is_active ? (
-                          <button
-                            type="button"
-                            onClick={() => setDeactivating(row)}
-                            className="rounded-md border border-critical/40 px-2.5 py-1 text-[11px] text-critical transition hover:bg-critical/5"
-                          >
-                            Deactivate
+                      {isAdmin && (
+                        <div className="flex flex-wrap justify-end gap-1.5">
+                          <button type="button" className={actionClass} onClick={() => setEditing(row)}>
+                            Edit
                           </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setActive(row, true).catch((err) => setError(err.message))
-                            }
-                            className={actionClass}
-                          >
-                            Reactivate
-                          </button>
-                        )}
-                      </div>
+                          {bot ? (
+                            <button type="button" className={actionClass} onClick={() => setTokensFor(row)}>
+                              Tokens
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className={actionClass}
+                              onClick={() => setResetting(row)}
+                            >
+                              Reset password
+                            </button>
+                          )}
+                          {row.is_active ? (
+                            <button
+                              type="button"
+                              onClick={() => setDeactivating(row)}
+                              className="rounded-md border border-critical/40 px-2.5 py-1 text-[11px] text-critical transition hover:bg-critical/5"
+                            >
+                              Deactivate
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setActive(row, true).catch((err) => setError(err.message))
+                              }
+                              className={actionClass}
+                            >
+                              Reactivate
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 )
@@ -234,6 +255,7 @@ export default function UsersPage() {
           onSubmit={handleReset}
         />
       )}
+      {tokensFor && <BotTokensModal bot={tokensFor} onClose={() => setTokensFor(null)} />}
       {deactivating && (
         <DeactivateModal
           user={deactivating}

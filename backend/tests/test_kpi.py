@@ -77,7 +77,7 @@ class TestSpeed:
     def test_cycle_time_runs_from_creation_to_close(self, make_task, flow):
         task = make_task(created_at=BASE)
         flow(task, [
-            (EventType.status_changed, None, S.in_progress_back, 2),
+            (EventType.status_changed, None, S.in_progress, 2),
             (EventType.status_changed, None, S.in_review, 6),
             (EventType.approved, None, S.done, 10),
             (EventType.closed, None, S.done, 10),
@@ -89,34 +89,49 @@ class TestSpeed:
     def test_time_in_status_measures_each_stage(self, make_task, flow):
         task = make_task(created_at=BASE)
         flow(task, [
-            (EventType.status_changed, None, S.in_progress_back, 3),   # to_do: 3h
-            (EventType.status_changed, None, S.in_progress_front, 8),  # back: 5h
-            (EventType.status_changed, None, S.in_review, 10),         # front: 2h
-            (EventType.approved, None, S.done, 14),                    # review: 4h
+            (EventType.status_changed, None, S.in_progress, 3),   # to_do: 3h
+            (EventType.status_changed, None, S.blocked, 8),       # in_progress: 5h
+            (EventType.status_changed, None, S.in_progress, 9),   # blocked: 1h
+            (EventType.status_changed, None, S.in_review, 10),    # in_progress: 1h
+            (EventType.approved, None, S.done, 14),               # review: 4h
             (EventType.closed, None, S.done, 14),
         ])
         speed, *_ = _metrics([task])
         assert speed.avg_time_in_status_hours == {
             "to_do": 3.0,
-            "in_progress_back": 5.0,
-            "in_progress_front": 2.0,
+            "in_progress": 3.0,
             "in_review": 4.0,
+            "blocked": 1.0,
+            "needs_confirm": None,
         }
+
+    def test_legacy_front_and_back_stages_fold_into_in_progress(self, make_task, flow):
+        """Old events carry the retired front/back statuses; they read as one stay."""
+        task = make_task(created_at=BASE)
+        flow(task, [
+            (EventType.status_changed, None, S.in_progress_front, 3),
+            (EventType.status_changed, None, S.in_progress_back, 8),
+            (EventType.status_changed, None, S.in_review, 10),
+            (EventType.approved, None, S.done, 14),
+            (EventType.closed, None, S.done, 14),
+        ])
+        speed, *_ = _metrics([task])
+        assert speed.avg_time_in_status_hours["in_progress"] == 7.0
 
     def test_the_current_open_stage_is_not_averaged_in(self, make_task, flow):
         """An unfinished stay would otherwise drag every average toward zero."""
         task = make_task(created_at=BASE)
-        flow(task, [(EventType.status_changed, None, S.in_progress_front, 4)])
+        flow(task, [(EventType.status_changed, None, S.in_progress, 4)])
         speed, *_ = _metrics([task])
         assert speed.avg_time_in_status_hours["to_do"] == 4.0
-        assert speed.avg_time_in_status_hours["in_progress_front"] is None
+        assert speed.avg_time_in_status_hours["in_progress"] is None
         assert speed.avg_cycle_time_hours is None
 
     def test_a_reassignment_does_not_split_a_stage_in_two(self, db_session, make_task, flow, leader):
         """Reassign events carry from_status == to_status; merging them keeps
         one six-hour stay from being counted as two three-hour ones."""
         task = make_task(created_at=BASE)
-        flow(task, [(EventType.status_changed, None, S.in_progress_front, 6)])
+        flow(task, [(EventType.status_changed, None, S.in_progress, 6)])
         log_event(
             db_session,
             task_id=task.id,
@@ -137,9 +152,9 @@ class TestQuality:
     def test_rejection_rate_is_rejections_over_submissions(self, make_task, flow):
         task = make_task(created_at=BASE)
         flow(task, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
-            (EventType.rejected, None, S.in_progress_front, 3),
+            (EventType.rejected, None, S.in_progress, 3),
             (EventType.status_changed, None, S.in_review, 4),
             (EventType.approved, None, S.done, 5),
             (EventType.closed, None, S.done, 5),
@@ -152,16 +167,16 @@ class TestQuality:
     def test_first_pass_rate_counts_tasks_approved_on_one_submission(self, make_task, flow):
         clean = make_task(title="clean", created_at=BASE)
         flow(clean, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
             (EventType.approved, None, S.done, 3),
             (EventType.closed, None, S.done, 3),
         ])
         bounced = make_task(title="bounced", created_at=BASE)
         flow(bounced, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
-            (EventType.rejected, None, S.in_progress_front, 3),
+            (EventType.rejected, None, S.in_progress, 3),
             (EventType.status_changed, None, S.in_review, 4),
             (EventType.approved, None, S.done, 5),
             (EventType.closed, None, S.done, 5),
@@ -180,28 +195,28 @@ class TestQuality:
 class TestVolume:
     def test_open_tasks_are_grouped_by_current_status(self, make_task, flow):
         a = make_task(title="a", created_at=BASE)
-        flow(a, [(EventType.status_changed, None, S.in_progress_front, 1)])
+        flow(a, [(EventType.status_changed, None, S.in_progress, 1)])
         b = make_task(title="b", created_at=BASE)
-        flow(b, [(EventType.status_changed, None, S.in_progress_front, 1)])
+        flow(b, [(EventType.status_changed, None, S.in_progress, 1)])
         c = make_task(title="c", created_at=BASE)
         flow(c, [])
         *_, volume, _ = _metrics([a, b, c])
         assert volume.open_total == 3
-        assert volume.open_by_status["in_progress_front"] == 2
+        assert volume.open_by_status["in_progress"] == 2
         assert volume.open_by_status["to_do"] == 1
         assert volume.completed_total == 0
 
     def test_completed_tasks_are_bucketed_by_week_and_month(self, make_task, flow):
         first = make_task(title="first", created_at=BASE)
         flow(first, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
             (EventType.approved, None, S.done, 3),
             (EventType.closed, None, S.done, 3),
         ])
         later = make_task(title="later", created_at=BASE)
         flow(later, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
             (EventType.approved, None, S.done, 24 * 8),
             (EventType.closed, None, S.done, 24 * 8),
@@ -214,7 +229,7 @@ class TestVolume:
     def test_completions_outside_the_window_are_excluded(self, make_task, flow):
         task = make_task(created_at=BASE)
         flow(task, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
             (EventType.approved, None, S.done, 3),
             (EventType.closed, None, S.done, 3),
@@ -230,7 +245,7 @@ class TestOnTime:
     def _close_at(self, make_task, flow, hours: int, due_in_days: int | None):
         task = make_task(created_at=BASE, due_in_days=due_in_days)
         flow(task, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
             (EventType.approved, None, S.done, hours),
             (EventType.closed, None, S.done, hours),
@@ -264,7 +279,7 @@ class TestAttribution:
     ):
         task = make_task(created_at=BASE, assignee_1=alice, assignee_2=bob)
         flow(task, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
             (EventType.approved, None, S.done, 3),
             (EventType.closed, None, S.done, 3),
@@ -284,7 +299,7 @@ class TestAttribution:
         """Credit follows assignment, not `actor_id` — the leader closes everything."""
         task = make_task(created_at=BASE, assignee_1=alice)
         flow(task, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
             (EventType.approved, None, S.done, 3),
             (EventType.closed, None, S.done, 3),
@@ -299,7 +314,7 @@ class TestAttribution:
     ):
         theirs = make_task(title="bob's", created_at=BASE, assignee_1=bob)
         flow(theirs, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
             (EventType.approved, None, S.done, 3),
             (EventType.closed, None, S.done, 3),
@@ -335,21 +350,21 @@ class TestCycleTimeTrend:
     def test_cycle_time_is_bucketed_by_the_week_it_closed_in(self, make_task, flow):
         fast = make_task(title="fast", created_at=BASE)
         flow(fast, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
             (EventType.approved, None, S.done, 10),
             (EventType.closed, None, S.done, 10),
         ])
         slow = make_task(title="slow", created_at=BASE)
         flow(slow, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
             (EventType.approved, None, S.done, 20),
             (EventType.closed, None, S.done, 20),
         ])
         next_week = make_task(title="next week", created_at=BASE)
         flow(next_week, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
             (EventType.approved, None, S.done, 24 * 8),
             (EventType.closed, None, S.done, 24 * 8),
@@ -367,7 +382,7 @@ class TestPointsWeighting:
             title=title, created_at=BASE, points=points, due_in_days=due_in_days, **kwargs
         )
         return flow(task, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.status_changed, None, S.in_review, 2),
             (EventType.approved, None, S.done, hours),
             (EventType.closed, None, S.done, hours),
@@ -413,13 +428,13 @@ class TestPointsWeighting:
 
     def test_open_work_is_weighted_too(self, make_task, flow):
         a = make_task(title="a", created_at=BASE, points=13)
-        flow(a, [(EventType.status_changed, None, S.in_progress_front, 1)])
+        flow(a, [(EventType.status_changed, None, S.in_progress, 1)])
         b = make_task(title="b", created_at=BASE, points=2)
         flow(b, [])
         *_, volume, _ = _metrics([a, b])
         assert volume.open_total == 2
         assert volume.open_points_total == 15
-        assert volume.open_points_by_status["in_progress_front"] == 13
+        assert volume.open_points_by_status["in_progress"] == 13
         assert volume.open_points_by_status["to_do"] == 2
 
     def test_points_are_zero_when_nothing_is_complete(self, make_task, flow):
@@ -434,7 +449,7 @@ class TestHoursPerPoint:
     def _complete(self, make_task, flow, *, title, points, hours):
         task = make_task(title=title, created_at=BASE, points=points)
         return flow(task, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.approved, None, S.done, hours),
             (EventType.closed, None, S.done, hours),
         ])
@@ -482,7 +497,7 @@ class TestPointsAttribution:
     ):
         task = make_task(created_at=BASE, points=13, assignee_1=alice, assignee_2=bob)
         flow(task, [
-            (EventType.status_changed, None, S.in_progress_front, 1),
+            (EventType.status_changed, None, S.in_progress, 1),
             (EventType.approved, None, S.done, 3),
             (EventType.closed, None, S.done, 3),
         ])

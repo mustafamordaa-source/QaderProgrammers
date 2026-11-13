@@ -1,4 +1,8 @@
-"""FastAPI application entry point."""
+"""FastAPI application entry point.
+
+The schema is managed by Alembic. Run `python migrate.py` before starting the
+server (the Docker image does this on every start).
+"""
 
 from __future__ import annotations
 
@@ -6,18 +10,32 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.config import settings
-from app.database import Base, engine
-from app.routers import auth, kpi, tasks, users
+from app.config import check_production_settings, settings
+from contextlib import asynccontextmanager
 
-# The schema is small and additive; create_all keeps local setup to one command.
-# Swap in Alembic if this ever needs real migrations.
-Base.metadata.create_all(bind=engine)
+from app import mailer
+from app.routers import auth, docs, github, kpi, notifications, tasks, users
+
+# Refuse to start in production with a public or short signing key.
+check_production_settings(settings)
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # The email sender runs only when SMTP is configured (see app.mailer).
+    mailer.sender.start()
+    yield
+    mailer.sender.stop()
+
 
 app = FastAPI(
+    lifespan=lifespan,
     title="TaskFlow API",
-    description="Internal task management and KPI tracking for a small software team.",
-    version="1.0.0",
+    description=(
+        "Task tracking for a small team and its AI agents. Agents authenticate "
+        "with a personal API token (`Authorization: Bearer qhub_...`) and name "
+        "themselves in the `X-Agent` header on writes."
+    ),
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -30,6 +48,9 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(tasks.router)
+app.include_router(docs.router)
+app.include_router(notifications.router)
+app.include_router(github.router)
 app.include_router(users.router)
 app.include_router(kpi.router)
 
