@@ -169,8 +169,17 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   out of `?ready=true`, refuses its claim and its move to in_progress. Loops
   are refused.
 - **Subtasks**: `parent_id`, two levels only. A parent cannot reach done while
-  a subtask is open. Split a shared frontend and backend task into one
-  subtask per side, so each agent holds its own claim.
+  a subtask is open.
+- **Split by side**: `POST /tasks/{id}/split` with `parts` (one per side:
+  fe, be, content...) turns a task that needs several roles into one subtask
+  per side, copying priority, tags, areas and due date. A part with
+  `assignee_id` goes to that person; one without goes to the pool for its
+  side, and only people whose "Works on" includes that side (or a lead) can
+  claim it. `order` (`[{"before": "be", "after": "fe"}]`) makes one part
+  block another. The parent lists every part with its side, people, claim
+  and status; it starts when the first part starts, and leads hear when
+  every part is closed. A member may split a task they work on into pool
+  parts; only a lead assigns parts.
 - **Fingerprints**: a creator (usually a scanner) may send a `fingerprint`
   such as `rule:path:symbol`. While a task with that fingerprint is open, a
   new one is not created: the open task gets a `seen_again` event and comes
@@ -446,6 +455,7 @@ POST   /notifications/test          send yourself a test email
 GET    /notifications/status        admin: is email on, pending, failed, last error
 GET    /tasks/templates             skeleton, required headings, criteria per kind
 POST   /tasks/{id}/links            {kind: blocks|relates|duplicates, to_task_id}; DELETE /links/{lid}
+POST   /tasks/{id}/split            one subtask per side: {parts: [{side, assignee_id?}], order?}
 POST   /github/webhook              GitHub only (signed)
 
 GET    /kpi/team   /kpi/me   /kpi/programmer/{id}

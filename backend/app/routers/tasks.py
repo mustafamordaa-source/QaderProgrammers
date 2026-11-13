@@ -71,6 +71,7 @@ from app.schemas import (
     TaskLinkOut,
     TaskRef,
     TemplateOut,
+    SplitRequest,
     TaskDetailOut,
     TaskEventOut,
     TaskOut,
@@ -221,9 +222,44 @@ def _detail(task: Task) -> TaskDetailOut:
     row.files = [FileOut.model_validate(f) for f in task.files if f.removed_at is None]
     row.context = [ContextOut.model_validate(c) for c in task.context]
     row.parent = TaskRef.model_validate(task.parent) if task.parent else None
-    row.children = [TaskRef.model_validate(c) for c in task.children]
+    row.children = [_ref(c) for c in task.children]
     row.links = _links_out(task)
     return row
+
+
+def _ref(task: Task) -> TaskRef:
+    """A subtask line for the parent's roster: side, people, claim, status."""
+    ref = TaskRef.model_validate(task)
+    ref.assignees = [u.handle or u.name for u in (task.assignee_1, task.assignee_2) if u]
+    if task.claim_is_live(utcnow()) and task.claimer:
+        holder = task.claimer.handle or task.claimer.name
+        ref.claim_holder = f"{holder} (agent {task.claim_agent})" if task.claim_agent else holder
+    return ref
+
+
+SIDE_LABELS = {
+    "fe": "Frontend", "be": "Backend", "mobile": "Mobile", "content": "Content",
+    "infra": "Infra", "qa": "QA", "design": "Design", "other": "Other",
+}
+
+
+def _start_parent(db: Session, auth: Auth, task: Task) -> None:
+    """The first subtask to start starts its parent too."""
+    parent = task.parent
+    if parent is not None and parent.status is S.to_do:
+        record(db, auth, task_id=parent.id, event_type=EventType.status_changed,
+               from_status=S.to_do, to_status=S.in_progress, comment=f"Subtask #{task.id} started")
+        parent.status = S.in_progress
+        _touch(parent)
+
+
+def _tell_leads_when_family_closes(db: Session, auth: Auth, task: Task) -> None:
+    parent = task.parent
+    if parent is None or parent.status in CLOSED_STATUSES:
+        return
+    if all(c.status in CLOSED_STATUSES for c in parent.children):
+        notify(db, auth, users=leads(db), task=parent, kind=NotifyKind.review,
+               text=f"Every subtask of #{parent.id} is closed; it can be reviewed and closed.")
 
 
 def _link_label(link: TaskLink, outgoing: bool) -> str:
@@ -672,6 +708,99 @@ def list_templates(auth: AuthCtx) -> list[dict]:
     return templates.as_json()
 
 
+@router.post("/{task_id}/split", response_model=TaskDetailOut, status_code=status.HTTP_201_CREATED)
+def split_task(
+    task_id: int,
+    payload: SplitRequest,
+    db: DbSession,
+    auth: Auth = Depends(require_scope("tasks:create")),
+) -> TaskDetailOut:
+    """Split a task into one subtask per side (frontend, backend, content...).
+
+    Each part copies the parent's priority, tags, areas and due date. A part
+    with an assignee goes to that person; a part without one goes to the pool
+    for its side, so anyone who works on that side can claim it. `order`
+    makes one part wait for another (for example backend before frontend).
+    A lead may split any task and assign parts; a member may split a task
+    they work on, into pool parts only.
+    """
+    parent = _get_task_or_404(db, task_id)
+    user = auth.user
+    _assert_visible(parent, user)
+    _assert_not_viewer(user)
+    if user.is_bot:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bots cannot split tasks")
+    if not user.is_lead:
+        _assert_worker(parent, user)
+        if any(p.assignee_id for p in payload.parts):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Only a lead assigns parts; leave assignee_id out to put them in the pool")
+    if parent.parent_id is not None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="This task is itself a subtask; subtasks go two levels deep")
+    if parent.status in CLOSED_STATUSES or parent.status is S.proposed:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"A {parent.status.value} task cannot be split")
+    taken = {c.side for c in parent.children if c.side is not None and c.status not in CLOSED_STATUSES}
+    clash = [p.side.value for p in payload.parts if p.side in taken]
+    if clash:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"An open subtask already covers: {', '.join(clash)}")
+    for part in payload.parts:
+        if part.assignee_id is not None:
+            _validate_assignees(db, part.assignee_id, None)
+
+    now = utcnow()
+    by_side: dict = {}
+    for part in payload.parts:
+        label = SIDE_LABELS[part.side.value]
+        child = Task(
+            title=lint.clean(part.title or f"{parent.title} ({label})", field="title")[:200],
+            description=lint.clean(
+                part.description or f"{label} part of #{parent.id}. Read the parent task and its documents first.",
+                field="description",
+            ),
+            priority=parent.priority,
+            points=part.points or parent.points,
+            status=S.to_do,
+            due_date=parent.due_date,
+            created_by=user.id,
+            assignee_1_id=part.assignee_id,
+            side=part.side,
+            tags=list(parent.tags or []),
+            areas=list(parent.areas or []),
+            restricted=parent.restricted,
+            pool=part.assignee_id is None,
+            created_kind=auth.kind,
+            created_agent=auth.agent,
+            parent_id=parent.id,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(child)
+        db.flush()
+        for n, text in enumerate(part.criteria, start=1):
+            db.add(Criterion(task_id=child.id, n=n, text=lint.clean(text, field=f"criterion {n}")))
+        record(db, auth, task_id=child.id, event_type=EventType.created, to_status=S.to_do, timestamp=now,
+               data={"split_from": parent.id, "side": part.side.value})
+        notify(db, auth, users=_people(db, [part.assignee_id]), task=child, kind=NotifyKind.assigned,
+               text=child.description)
+        by_side[part.side] = child
+
+    for o in payload.order:
+        before, after = by_side[o.before], by_side[o.after]
+        db.add(TaskLink(from_task_id=before.id, to_task_id=after.id, kind=LinkKind.blocks,
+                        created_by=user.id, actor_kind=auth.kind, created_at=now))
+        record(db, auth, task_id=after.id, event_type=EventType.linked,
+               data={"kind": "blocks", "from": before.id})
+
+    record(db, auth, task_id=parent.id, event_type=EventType.field_changed,
+           data={"split_into": {s.value: c.id for s, c in by_side.items()}})
+    _touch(parent)
+    db.commit()
+    return _detail(_get_task_or_404(db, parent.id))
+
+
 @router.post("/{task_id}/links", response_model=TaskDetailOut, status_code=status.HTTP_201_CREATED)
 def add_link(
     task_id: int,
@@ -1040,6 +1169,11 @@ def change_status(
         record(db, auth, task_id=task.id, event_type=EventType.status_changed,
                from_status=from_status, to_status=target, comment=comment, timestamp=now)
 
+    if target is S.in_progress:
+        _start_parent(db, auth, task)
+    if target in CLOSED_STATUSES:
+        db.flush()
+        _tell_leads_when_family_closes(db, auth, task)
     workers = _people(db, task.assignee_ids)
     if target is S.in_review:
         notify(db, auth, users=leads(db), task=task, kind=NotifyKind.review, text=task.summary or comment)
@@ -1142,6 +1276,14 @@ def claim_task(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can claim tasks assigned to you, or pool tasks",
         )
+    if (
+        task.pool and not user.is_lead and user.id not in task.assignee_ids
+        and task.side is not None and user.sides and task.side.value not in user.sides
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"This pool task is {SIDE_LABELS[task.side.value]} work; your profile lists {', '.join(user.sides)}",
+        )
 
     agent = auth.agent if auth.kind is ActorKind.agent else (payload.agent or "").strip() or None
     now = utcnow()
@@ -1194,6 +1336,7 @@ def claim_task(
         record(db, auth, task_id=task.id, event_type=EventType.status_changed,
                from_status=S.to_do, to_status=S.in_progress, comment="Claimed", timestamp=now)
         task.status = S.in_progress
+        _start_parent(db, auth, task)
 
     record(
         db,

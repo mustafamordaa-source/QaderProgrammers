@@ -262,6 +262,43 @@ class TaskRef(ORMModel):
     title: str
     status: TaskStatus
     kind: TaskKind = TaskKind.task
+    # Who is on it: filled for subtasks so the parent shows the roster.
+    side: Side | None = None
+    assignees: list[str] = []
+    claim_holder: str | None = None
+    pool: bool = False
+
+
+class SplitPart(BaseModel):
+    side: Side
+    title: str | None = Field(default=None, max_length=200)
+    assignee_id: int | None = None
+    points: int | None = None
+    description: str | None = Field(default=None, max_length=20_000)
+    criteria: list[str] = Field(default_factory=list, max_length=30)
+
+    _check_points = field_validator("points")(staticmethod(lambda v: _validate_points(v)))
+
+
+class SplitOrder(BaseModel):
+    # The part on side `before` blocks the part on side `after`.
+    before: Side
+    after: Side
+
+
+class SplitRequest(BaseModel):
+    parts: list[SplitPart] = Field(min_length=1, max_length=8)
+    order: list[SplitOrder] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def _one_part_per_side(self):
+        sides = [p.side for p in self.parts]
+        if len(sides) != len(set(sides)):
+            raise ValueError("one part per side")
+        for o in self.order:
+            if o.before not in sides or o.after not in sides or o.before == o.after:
+                raise ValueError("order: both sides must be parts, and different")
+        return self
 
 
 class TaskLinkOut(BaseModel):

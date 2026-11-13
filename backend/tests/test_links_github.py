@@ -244,3 +244,95 @@ class TestGithub:
         assert client.get(f"/tasks/{task.id}", headers=auth(alice)).json()["deploy_state"] == "production"
         # Never back.
         assert _hook(client, "workflow_run", run("develop", "2026-11-15T08:00:00Z")).json()["tasks"] == []
+
+
+# --- split by side ------------------------------------------------------------------
+
+
+class TestSplit:
+    @pytest.fixture()
+    def team(self, db_session, alice, bob, carol):
+        alice.handle, alice.sides = "alice", ["be"]
+        bob.handle, bob.sides = "bob", ["fe"]
+        carol.handle, carol.sides = "carol", ["content"]
+        db_session.commit()
+
+    def test_split_into_parts_with_people_pool_and_order(self, client, auth, leader, alice, bob, carol, team):
+        h = auth(leader)
+        parent = client.post("/tasks", headers=h, json={
+            "title": "Ready accounts", "priority": "high", "tags": ["accounts"]}).json()
+        r = client.post(f"/tasks/{parent['id']}/split", headers=h, json={
+            "parts": [
+                {"side": "be", "assignee_id": alice.id, "criteria": ["Endpoint returns a CSV"]},
+                {"side": "fe"},
+                {"side": "content", "title": "Arabic and English copy for the screen"},
+            ],
+            "order": [{"before": "be", "after": "fe"}],
+        })
+        assert r.status_code == 201, r.text
+        roster = {c["side"]: c for c in r.json()["children"]}
+        assert roster["be"]["assignees"] == ["alice"] and roster["be"]["pool"] is False
+        assert roster["fe"]["pool"] is True and roster["fe"]["title"] == "Ready accounts (Frontend)"
+        assert roster["content"]["title"] == "Arabic and English copy for the screen"
+
+        fe = client.get(f"/tasks/{roster['fe']['id']}", headers=h).json()
+        assert fe["blocked_by"] == [roster["be"]["id"]]
+        assert fe["priority"] == "high" and fe["tags"] == ["accounts"]
+        assert [n["kind"] for n in client.get("/notifications", headers=auth(alice)).json()] == ["assigned"]
+
+    def test_pool_parts_go_to_people_on_that_side(self, client, auth, leader, alice, bob, carol, team):
+        h = auth(leader)
+        parent = client.post("/tasks", headers=h, json={"title": "Page"}).json()
+        out = client.post(f"/tasks/{parent['id']}/split", headers=h, json={"parts": [{"side": "fe"}]}).json()
+        fe_id = out["children"][0]["id"]
+        wrong = client.post(f"/tasks/{fe_id}/claim", headers=auth(alice), json={})
+        assert wrong.status_code == 403 and "Frontend" in wrong.json()["detail"]
+        right = client.post(f"/tasks/{fe_id}/claim", headers=auth(bob), json={})
+        assert right.status_code == 200
+        roster = client.get(f"/tasks/{parent['id']}", headers=h).json()["children"]
+        assert roster[0]["claim_holder"] == "bob"
+
+    def test_first_part_started_starts_the_parent_and_leads_hear_when_all_close(
+        self, client, auth, leader, alice, bob, team, db_session
+    ):
+        h = auth(leader)
+        parent = client.post("/tasks", headers=h, json={"title": "Feature"}).json()
+        out = client.post(f"/tasks/{parent['id']}/split", headers=h, json={
+            "parts": [{"side": "be", "assignee_id": alice.id}, {"side": "fe", "assignee_id": bob.id}]}).json()
+        be, fe = (c["id"] for c in out["children"])
+        client.post(f"/tasks/{be}/claim", headers=auth(alice), json={})
+        assert client.get(f"/tasks/{parent['id']}", headers=h).json()["status"] == "in_progress"
+
+        for tid, who in ((be, alice), (fe, bob)):
+            client.patch(f"/tasks/{tid}/status", headers=auth(who), json={"status": "in_progress"})
+            client.patch(f"/tasks/{tid}/status", headers=auth(who), json={"status": "in_review"})
+            client.patch(f"/tasks/{tid}/status", headers=h, json={"status": "done"})
+        from app.models import Role
+        from tests.conftest import make_user
+
+        second_lead = make_user(db_session, "Lead Two", "lead2@example.com", Role.leader)
+        # Reopen nothing; the second lead was not there yet, so close a fresh family.
+        p2 = client.post("/tasks", headers=h, json={"title": "Feature 2"}).json()
+        kid = client.post(f"/tasks/{p2['id']}/split", headers=h,
+                          json={"parts": [{"side": "be", "assignee_id": alice.id}]}).json()["children"][0]["id"]
+        client.patch(f"/tasks/{kid}/status", headers=auth(alice), json={"status": "in_progress"})
+        client.patch(f"/tasks/{kid}/status", headers=auth(alice), json={"status": "in_review"})
+        client.patch(f"/tasks/{kid}/status", headers=h, json={"status": "done"})
+        notes = client.get("/notifications", headers=auth(second_lead)).json()
+        assert any("Every subtask" in (n["text"] or "") for n in notes)
+
+    def test_split_rules(self, client, auth, leader, alice, team):
+        h = auth(leader)
+        parent = client.post("/tasks", headers=h, json={"title": "P"}).json()
+        client.post(f"/tasks/{parent['id']}/split", headers=h, json={"parts": [{"side": "be"}]})
+        again = client.post(f"/tasks/{parent['id']}/split", headers=h, json={"parts": [{"side": "be"}]})
+        assert again.status_code == 409  # already covered
+        dup = client.post(f"/tasks/{parent['id']}/split", headers=h, json={"parts": [{"side": "fe"}, {"side": "fe"}]})
+        assert dup.status_code == 422
+        # A member may split their own task into pool parts, not assign them.
+        mine = client.post("/tasks", headers=h, json={"title": "M", "assignee_1_id": alice.id}).json()
+        assigned = client.post(f"/tasks/{mine['id']}/split", headers=auth(alice),
+                               json={"parts": [{"side": "fe", "assignee_id": alice.id}]})
+        assert assigned.status_code == 403
+        pooled = client.post(f"/tasks/{mine['id']}/split", headers=auth(alice), json={"parts": [{"side": "fe"}]})
+        assert pooled.status_code == 201
