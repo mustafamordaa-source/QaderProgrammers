@@ -1,47 +1,80 @@
-import { useCallback, useEffect, useState } from 'react'
-import { api } from '../api/client'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { api, isVersionConflict } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import KanbanBoard from '../components/board/KanbanBoard'
 import CreateTaskModal from '../components/board/CreateTaskModal'
 import TaskDetailModal from '../components/board/TaskDetailModal'
+import { SIDES, SIDE_LABELS } from '../lib/constants'
+
+const controlClass =
+  'rounded-lg border border-hairline bg-surface-raised px-3 py-1.5 text-sm outline-none focus:border-series1'
+
+/** Wait until the value stops changing, so typing does not fire a request per key. */
+function useDebounced(value, delay = 300) {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+  return debounced
+}
 
 export default function BoardPage() {
-  const { user, isLeader } = useAuth()
+  const { user, isLeader, isViewer } = useAuth()
   const [tasks, setTasks] = useState([])
-  const [programmers, setProgrammers] = useState([])
+  const [people, setPeople] = useState([])
   const [selected, setSelected] = useState(null)
   const [creating, setCreating] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [notice, setNotice] = useState(null)
+
+  const [mine, setMine] = useState(false)
+  const [side, setSide] = useState('')
+  const [tagInput, setTagInput] = useState('')
+  const [search, setSearch] = useState('')
+  const tag = useDebounced(tagInput.trim())
+  const q = useDebounced(search.trim())
+
+  // Ignore answers to filter sets the user has already moved past.
+  const requestId = useRef(0)
 
   const load = useCallback(async () => {
+    const id = ++requestId.current
     try {
-      const list = await api.tasks()
-      setTasks(list)
+      const list = await api.tasks({ mine: mine || undefined, side, tag, q })
+      if (id !== requestId.current) return
+      setTasks(list.filter((task) => task.status !== 'dropped'))
       setError(null)
     } catch (err) {
-      setError(err.message)
+      if (id === requestId.current) setError(err.message)
     } finally {
-      setLoading(false)
+      if (id === requestId.current) setLoading(false)
     }
-  }, [])
+  }, [mine, side, tag, q])
 
   useEffect(() => {
     load()
   }, [load])
 
   useEffect(() => {
-    if (!isLeader) return
-    api.programmers().then(setProgrammers).catch(() => setProgrammers([]))
-  }, [isLeader])
+    api.directory().then(setPeople).catch(() => setPeople([]))
+  }, [])
 
   function applyUpdate(updated) {
-    setTasks((current) => current.map((task) => (task.id === updated.id ? updated : task)))
+    setTasks((current) => {
+      const rest = current.filter((task) => task.id !== updated.id)
+      if (updated.status === 'dropped') return rest
+      const exists = rest.length !== current.length
+      return exists
+        ? current.map((task) => (task.id === updated.id ? updated : task))
+        : [updated, ...current]
+    })
     setSelected((current) => (current?.id === updated.id ? updated : current))
   }
 
   async function openTask(task) {
-    // The list payload omits the event log; fetch the detail view for the trail.
+    // The list payload omits comments, criteria, links and events.
     setSelected(task)
     try {
       setSelected(await api.task(task.id))
@@ -51,39 +84,45 @@ export default function BoardPage() {
   }
 
   async function handleMove(task, status) {
-    const updated = await api.changeStatus(task.id, status)
-    applyUpdate(updated)
-  }
-
-  async function handleReject(task, toStatus, comment) {
-    const updated = await api.reject(task.id, toStatus, comment)
-    applyUpdate(updated)
-  }
-
-  async function handleReestimate(task, points) {
-    applyUpdate(await api.updateTask(task.id, { points }))
+    setNotice(null)
+    try {
+      applyUpdate(await api.changeStatus(task.id, { status, expectedVersion: task.version }))
+    } catch (err) {
+      if (isVersionConflict(err)) {
+        setError('Someone changed this task while you were looking. The board has been reloaded; try again.')
+        load()
+      } else {
+        setError(err.message)
+      }
+    }
   }
 
   async function handleCreate(payload) {
     const created = await api.createTask(payload)
-    setTasks((current) => [created, ...current])
+    applyUpdate(created)
+    if (!isLeader) {
+      setNotice(`Task #${created.id} is in the backlog. A leader will triage it.`)
+    }
   }
+
+  const filtered = mine || side || tag || q
+  const programmers = people.filter((person) => person.role === 'programmer')
 
   return (
     <>
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">
-            {isLeader ? 'Team board' : 'My tasks'}
-          </h1>
+          <h1 className="text-xl font-semibold tracking-tight">Team board</h1>
           <p className="mt-0.5 text-sm text-ink-secondary">
             {isLeader
-              ? 'Every task across the team. Only you can approve work out of review.'
-              : `${tasks.length} task${tasks.length === 1 ? '' : 's'} assigned to you.`}
+              ? 'Every task across the team. Only you can triage, approve and drop work.'
+              : isViewer
+                ? 'Read-only view of the team’s work.'
+                : 'The team’s work. You can move tasks assigned to you and pool tasks you claimed.'}
           </p>
         </div>
 
-        {isLeader && (
+        {!isViewer && (
           <button
             type="button"
             onClick={() => setCreating(true)}
@@ -94,36 +133,84 @@ export default function BoardPage() {
         )}
       </div>
 
+      <div className="mb-4 flex flex-wrap items-center gap-2" role="search">
+        <label className="inline-flex items-center gap-2 rounded-lg border border-hairline px-3 py-1.5 text-sm">
+          <input type="checkbox" checked={mine} onChange={(event) => setMine(event.target.checked)} />
+          Mine
+        </label>
+        <select
+          aria-label="Side"
+          value={side}
+          onChange={(event) => setSide(event.target.value)}
+          className={controlClass}
+        >
+          <option value="">All sides</option>
+          {SIDES.map((value) => (
+            <option key={value} value={value}>
+              {SIDE_LABELS[value]}
+            </option>
+          ))}
+        </select>
+        <input
+          aria-label="Tag"
+          placeholder="Tag"
+          dir="auto"
+          value={tagInput}
+          onChange={(event) => setTagInput(event.target.value)}
+          className={`${controlClass} w-36`}
+        />
+        <input
+          type="search"
+          aria-label="Search title, description and summary"
+          placeholder="Search…"
+          dir="auto"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          className={`${controlClass} w-56`}
+        />
+        {filtered && (
+          <button
+            type="button"
+            onClick={() => {
+              setMine(false)
+              setSide('')
+              setTagInput('')
+              setSearch('')
+            }}
+            className="text-xs text-ink-secondary underline-offset-2 hover:text-ink hover:underline"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
       {error && (
         <p role="alert" className="mb-4 rounded-lg border border-critical/40 px-3 py-2 text-sm text-critical">
           {error}
         </p>
       )}
+      {notice && (
+        <p role="status" className="mb-4 rounded-lg border border-good/40 px-3 py-2 text-sm text-good">
+          {notice}
+        </p>
+      )}
 
       {loading ? (
         <p className="text-sm text-ink-muted">Loading board…</p>
-      ) : tasks.length === 0 ? (
+      ) : tasks.length === 0 && !filtered ? (
         <div className="rounded-xl border border-dashed border-hairline px-6 py-12 text-center">
-          <p className="text-sm font-medium">
-            {isLeader ? 'No tasks yet.' : 'Nothing assigned to you right now.'}
-          </p>
+          <p className="text-sm font-medium">No tasks yet.</p>
           <p className="mt-1 text-sm text-ink-muted">
-            {isLeader
-              ? 'Create the first one to get the board moving.'
-              : 'Your team leader will assign work here.'}
+            {isViewer ? 'Work will show up here once the team adds it.' : 'Create the first one to get the board moving.'}
           </p>
         </div>
       ) : (
-        <KanbanBoard
-          tasks={tasks}
-          role={user.role}
-          onOpenTask={openTask}
-          onMove={(task, status) => handleMove(task, status).catch((err) => setError(err.message))}
-        />
+        <KanbanBoard tasks={tasks} user={user} onOpenTask={openTask} onMove={handleMove} />
       )}
 
       {creating && (
         <CreateTaskModal
+          role={user.role}
           programmers={programmers}
           onClose={() => setCreating(false)}
           onCreate={handleCreate}
@@ -133,11 +220,10 @@ export default function BoardPage() {
       {selected && (
         <TaskDetailModal
           task={selected}
-          role={user.role}
+          user={user}
+          people={people}
           onClose={() => setSelected(null)}
-          onMove={handleMove}
-          onReject={handleReject}
-          onReestimate={handleReestimate}
+          onChanged={applyUpdate}
         />
       )}
     </>

@@ -6,6 +6,8 @@ import LoginPage from './pages/LoginPage'
 import BoardPage from './pages/BoardPage'
 import KpiPage from './pages/KpiPage'
 import UsersPage from './pages/UsersPage'
+import InboxPage from './pages/InboxPage'
+import SettingsPage from './pages/SettingsPage'
 
 export default function App() {
   return (
@@ -20,6 +22,7 @@ export default function App() {
           }
         >
           <Route path="/board" element={<BoardPage />} />
+          <Route path="/inbox" element={<InboxPage />} />
           <Route path="/metrics" element={<KpiPage />} />
           <Route
             path="/people"
@@ -29,6 +32,7 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/board" replace />} />
       </Routes>

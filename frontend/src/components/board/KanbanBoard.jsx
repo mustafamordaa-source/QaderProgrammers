@@ -1,21 +1,47 @@
 import { useState } from 'react'
 import TaskCard from './TaskCard'
-import { STATUSES, STATUS_LABELS, allowedTargets } from '../../lib/constants'
+import {
+  BOARD_COLUMNS,
+  allowedTargets,
+  isWorkerOn,
+  moveNeedsComment,
+  moveNeedsCriteriaMet,
+} from '../../lib/constants'
+
+/** The status a drop on `column` would move `task` to, or null. Moves that
+ *  need a comment (drop, send back) or open criteria stay in the detail view. */
+function dropTarget(column, task, targets) {
+  if (!task || column.statuses.includes(task.status)) return null
+  return (
+    column.statuses.find(
+      (status) =>
+        targets.includes(status) &&
+        !moveNeedsComment(task.status, status) &&
+        !(moveNeedsCriteriaMet(status) && task.criteria_open > 0),
+    ) ?? null
+  )
+}
 
 /**
- * Five fixed columns. Cards can be dragged between them, but a drop is only
- * accepted where the transition is legal for the current user's role — and the
- * server re-checks it regardless.
+ * Fixed columns. Cards can be dragged between them, but a drop is only
+ * accepted where the transition is legal for the current user — and the
+ * server re-checks it regardless. Leaders also see the Triage column.
  */
-export default function KanbanBoard({ tasks, role, onOpenTask, onMove }) {
+export default function KanbanBoard({ tasks, user, onOpenTask, onMove }) {
   const [dragging, setDragging] = useState(null)
   const [hoveredColumn, setHoveredColumn] = useState(null)
+  const isLeader = user.role === 'leader'
 
-  const byStatus = Object.fromEntries(
-    STATUSES.map((status) => [status, tasks.filter((task) => task.status === status)]),
+  const columns = BOARD_COLUMNS.filter((column) => !column.leaderOnly || isLeader)
+  const byColumn = Object.fromEntries(
+    columns.map((column) => [
+      column.key,
+      tasks.filter((task) => column.statuses.includes(task.status)),
+    ]),
   )
 
-  const validTargets = dragging ? allowedTargets(dragging.status, role) : []
+  const targetsFor = (task) => allowedTargets(task, user.role, isWorkerOn(task, user))
+  const draggingTargets = dragging ? targetsFor(dragging) : []
 
   function handleDragStart(event, task) {
     setDragging(task)
@@ -23,43 +49,46 @@ export default function KanbanBoard({ tasks, role, onOpenTask, onMove }) {
     event.dataTransfer.setData('text/plain', String(task.id))
   }
 
-  function handleDrop(status) {
-    if (dragging && validTargets.includes(status)) {
-      onMove(dragging, status)
-    }
+  function handleDrop(column) {
+    const target = dropTarget(column, dragging, draggingTargets)
+    if (dragging && target) onMove(dragging, target)
     setDragging(null)
     setHoveredColumn(null)
   }
 
   return (
     <div
-      className="grid gap-3 lg:grid-cols-5"
+      className="grid auto-cols-[minmax(15rem,1fr)] grid-flow-col gap-3 overflow-x-auto pb-2"
       onDragEnd={() => {
         setDragging(null)
         setHoveredColumn(null)
       }}
     >
-      {STATUSES.map((status) => {
-        const isTarget = dragging && validTargets.includes(status)
-        const isBlocked = dragging && !isTarget && dragging.status !== status
+      {columns.map((column) => {
+        const target = dropTarget(column, dragging, draggingTargets)
+        const isHome = dragging && column.statuses.includes(dragging.status)
+        const isBlocked = dragging && !target && !isHome
+        const list = byColumn[column.key]
 
         return (
           <section
-            key={status}
-            aria-label={STATUS_LABELS[status]}
+            key={column.key}
+            aria-label={column.label}
             onDragOver={(event) => {
-              if (!isTarget) return
+              if (!target) return
               event.preventDefault()
-              setHoveredColumn(status)
+              setHoveredColumn(column.key)
             }}
-            onDragLeave={() => setHoveredColumn((current) => (current === status ? null : current))}
+            onDragLeave={() =>
+              setHoveredColumn((current) => (current === column.key ? null : current))
+            }
             onDrop={(event) => {
               event.preventDefault()
-              handleDrop(status)
+              handleDrop(column)
             }}
             className={[
               'flex min-h-[8rem] flex-col rounded-xl border p-2.5 transition',
-              hoveredColumn === status
+              hoveredColumn === column.key
                 ? 'border-series1 bg-surface-raised'
                 : 'border-hairline bg-surface-raised/50',
               isBlocked ? 'opacity-40' : '',
@@ -67,24 +96,23 @@ export default function KanbanBoard({ tasks, role, onOpenTask, onMove }) {
           >
             <header className="mb-2.5 flex items-baseline justify-between px-1">
               <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">
-                {STATUS_LABELS[status]}
+                {column.label}
               </h2>
-              <span className="tabular text-xs text-ink-muted">
-                {byStatus[status].length}
-              </span>
+              <span className="tabular text-xs text-ink-muted">{list.length}</span>
             </header>
 
             <div className="flex flex-col gap-2">
-              {byStatus[status].map((task) => (
+              {list.map((task) => (
                 <TaskCard
                   key={task.id}
                   task={task}
                   onOpen={onOpenTask}
                   onDragStart={handleDragStart}
-                  draggable={allowedTargets(task.status, role).length > 0}
+                  draggable={targetsFor(task).length > 0}
+                  showStatus={column.statuses.length > 1}
                 />
               ))}
-              {byStatus[status].length === 0 && (
+              {list.length === 0 && (
                 <p className="px-1 py-3 text-xs text-ink-muted">Nothing here.</p>
               )}
             </div>

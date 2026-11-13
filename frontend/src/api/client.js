@@ -1,4 +1,4 @@
-// Thin fetch wrapper. The dev server proxies /auth, /tasks and /kpi to the
+// Thin fetch wrapper. The dev server proxies /auth, /tasks, /users and /kpi to the
 // backend, so a relative base URL works without CORS in development; set
 // VITE_API_URL to point a production build at a different origin.
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -75,17 +75,35 @@ async function request(path, { method = 'GET', body, params } = {}) {
   return payload
 }
 
+/** True when the server refused a write because the task changed meanwhile. */
+export function isVersionConflict(err) {
+  return err instanceof ApiError && err.status === 409 && /changed since you read it/i.test(err.message)
+}
+
 export const api = {
   login: (email, password) => request('/auth/login', { method: 'POST', body: { email, password } }),
   me: () => request('/auth/me'),
   programmers: () => request('/auth/users', { params: { role: 'programmer' } }),
+  // Every active person, for question addressees and name lookups.
+  directory: () => request('/auth/users'),
 
-  tasks: () => request('/tasks'),
+  // Personal API tokens for agents.
+  scopes: () => request('/auth/scopes'),
+  tokens: () => request('/auth/tokens'),
+  createToken: (payload) => request('/auth/tokens', { method: 'POST', body: payload }),
+  revokeToken: (id) => request(`/auth/tokens/${id}`, { method: 'DELETE' }),
+
+  // filters: { mine, ready, side, tag, q, status_filter, include_closed }
+  tasks: (filters) => request('/tasks', { params: filters }),
+  inbox: () => request('/tasks/inbox'),
   task: (id) => request(`/tasks/${id}`),
   createTask: (payload) => request('/tasks', { method: 'POST', body: payload }),
   updateTask: (id, payload) => request(`/tasks/${id}`, { method: 'PATCH', body: payload }),
-  changeStatus: (id, status, comment) =>
-    request(`/tasks/${id}/status`, { method: 'PATCH', body: { status, comment } }),
+  changeStatus: (id, { status, comment, expectedVersion }) =>
+    request(`/tasks/${id}/status`, {
+      method: 'PATCH',
+      body: { status, comment: comment || null, expected_version: expectedVersion ?? null },
+    }),
   assign: (id, assignee1, assignee2) =>
     request(`/tasks/${id}/assign`, {
       method: 'PATCH',
@@ -96,6 +114,20 @@ export const api = {
       method: 'POST',
       body: { to_status: toStatus, comment },
     }),
+  claim: (id, payload) => request(`/tasks/${id}/claim`, { method: 'POST', body: payload }),
+  release: (id) => request(`/tasks/${id}/release`, { method: 'POST' }),
+  setDeploy: (id, state, note) =>
+    request(`/tasks/${id}/deploy`, { method: 'PATCH', body: { state, note: note || null } }),
+
+  addComment: (id, payload) => request(`/tasks/${id}/comments`, { method: 'POST', body: payload }),
+  resolveComment: (id, commentId) =>
+    request(`/tasks/${id}/comments/${commentId}/resolve`, { method: 'POST' }),
+
+  addCriterion: (id, text) => request(`/tasks/${id}/criteria`, { method: 'POST', body: { text } }),
+  updateCriterion: (id, n, payload) =>
+    request(`/tasks/${id}/criteria/${n}`, { method: 'PATCH', body: payload }),
+
+  addGitLink: (id, payload) => request(`/tasks/${id}/git`, { method: 'POST', body: payload }),
 
   // Leader-only user management.
   adminUsers: () => request('/users'),

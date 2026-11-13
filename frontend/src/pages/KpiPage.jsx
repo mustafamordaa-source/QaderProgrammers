@@ -151,7 +151,7 @@ export default function KpiPage() {
           creating it.
           {isLeader && (
             <>
-              {' '}A task shared by two programmers counts once for the team and in full
+              {' '}A task shared by two members counts once for the team and in full
               for each of them.
             </>
           )}

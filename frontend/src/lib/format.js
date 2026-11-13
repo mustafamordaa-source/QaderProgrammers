@@ -38,7 +38,7 @@ export function fromDateInputValue(value, endOfDay = false) {
 
 export function isOverdue(dueDate, status) {
   const date = asUtcDate(dueDate)
-  return Boolean(date) && status !== 'done' && date.getTime() < Date.now()
+  return Boolean(date) && status !== 'done' && status !== 'dropped' && date.getTime() < Date.now()
 }
 
 /** Hours as a compact, human-readable duration. */

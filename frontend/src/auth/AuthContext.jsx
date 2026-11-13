@@ -50,6 +50,7 @@ export function AuthProvider({ children }) {
       login,
       logout,
       isLeader: user?.role === 'leader',
+      isViewer: user?.role === 'viewer',
     }),
     [user, loading, login, logout],
   )

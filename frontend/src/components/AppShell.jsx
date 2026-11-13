@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { initials } from '../lib/format'
+import { ROLE_LABELS } from '../lib/constants'
 import ThemeToggle from './ThemeToggle'
 
 function navClass({ isActive }) {
@@ -19,9 +20,12 @@ export default function AppShell() {
         <div className="mx-auto flex max-w-[1400px] items-center gap-4 px-4 py-3 sm:px-6">
           <span className="text-base font-semibold tracking-tight">TaskFlow</span>
 
-          <nav className="flex items-center gap-1">
+          <nav className="flex flex-wrap items-center gap-1">
             <NavLink to="/board" className={navClass}>
               Board
+            </NavLink>
+            <NavLink to="/inbox" className={navClass}>
+              Inbox
             </NavLink>
             <NavLink to="/metrics" className={navClass}>
               {isLeader ? 'Team KPIs' : 'My KPIs'}
@@ -31,14 +35,17 @@ export default function AppShell() {
                 People
               </NavLink>
             )}
+            <NavLink to="/settings" className={navClass}>
+              Settings
+            </NavLink>
           </nav>
 
           <div className="ml-auto flex items-center gap-3">
             <ThemeToggle />
             <div className="hidden text-right sm:block">
-              <div className="text-sm font-medium leading-tight">{user?.name}</div>
-              <div className="text-xs capitalize leading-tight text-ink-muted">
-                {user?.role}
+              <div dir="auto" className="text-sm font-medium leading-tight">{user?.name}</div>
+              <div className="text-xs leading-tight text-ink-muted">
+                {ROLE_LABELS[user?.role] ?? user?.role}
               </div>
             </div>
             <span

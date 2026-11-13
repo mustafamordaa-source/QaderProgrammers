@@ -5,18 +5,8 @@ import UserFormModal from '../components/users/UserFormModal'
 import PasswordResetModal from '../components/users/PasswordResetModal'
 import DeactivateModal from '../components/users/DeactivateModal'
 import { formatDate, initials } from '../lib/format'
-
-function RoleBadge({ role }) {
-  return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-        role === 'leader' ? 'border-series1/40 text-series1' : 'border-hairline text-ink-secondary'
-      }`}
-    >
-      {role === 'leader' ? 'Leader' : 'Programmer'}
-    </span>
-  )
-}
+import { RoleBadge } from '../components/Badges'
+import { SIDE_LABELS } from '../lib/constants'
 
 function StatusBadge({ active }) {
   return (
@@ -122,10 +112,10 @@ export default function UsersPage() {
         <p className="text-sm text-ink-muted">Loading people…</p>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-hairline bg-surface">
-          <table className="w-full min-w-[720px] text-sm">
+          <table className="w-full min-w-[960px] text-sm">
             <thead>
               <tr className="border-b border-hairline text-left">
-                {['Name', 'Role', 'Status', 'Open tasks', 'Added', ''].map((column) => (
+                {['Name', 'Handle', 'Role', 'Sides', 'Status', 'Open tasks', 'WIP', 'Added', ''].map((column) => (
                   <th
                     key={column}
                     className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-secondary"
@@ -155,7 +145,7 @@ export default function UsersPage() {
                         </span>
                         <div className="min-w-0">
                           <div className="font-medium leading-tight">
-                            {row.name}
+                            <span dir="auto">{row.name}</span>
                             {isSelf && (
                               <span className="ml-1.5 text-[11px] font-normal text-ink-muted">
                                 (you)
@@ -168,8 +158,21 @@ export default function UsersPage() {
                         </div>
                       </div>
                     </td>
+                    <td className="px-4 py-3 text-xs text-ink-secondary">
+                      {row.handle ? <span dir="ltr">@{row.handle}</span> : <span className="text-ink-muted">—</span>}
+                      {row.github_login && (
+                        <div dir="ltr" className="text-[11px] text-ink-muted">
+                          GitHub: {row.github_login}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <RoleBadge role={row.role} />
+                    </td>
+                    <td className="px-4 py-3 text-xs text-ink-secondary">
+                      {row.sides?.length
+                        ? row.sides.map((side) => SIDE_LABELS[side] ?? side).join(', ')
+                        : <span className="text-ink-muted">—</span>}
                     </td>
                     <td className="px-4 py-3">
                       <StatusBadge active={row.is_active} />
@@ -177,6 +180,7 @@ export default function UsersPage() {
                     <td className="tabular px-4 py-3 text-ink-secondary">
                       {row.open_task_count}
                     </td>
+                    <td className="tabular px-4 py-3 text-ink-secondary">{row.wip_limit}</td>
                     <td className="px-4 py-3 text-xs text-ink-muted">
                       {formatDate(row.created_at)}
                     </td>
