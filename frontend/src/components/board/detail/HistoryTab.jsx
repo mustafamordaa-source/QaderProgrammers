@@ -66,9 +66,20 @@ function describe(event, peopleById) {
   const data = event.data
   if (!data || typeof data !== 'object') return []
   switch (event.event_type) {
+    case 'created':
+      // A part made by POST /tasks/{id}/split.
+      return [
+        data.split_from ? `Created as part of #${data.split_from}` : null,
+        data.split_from && data.side ? `Side: ${SIDE_LABELS[data.side] ?? data.side}` : null,
+      ].filter(Boolean)
     case 'field_changed':
       return Object.entries(data).map(([field, change]) => {
         const label = FIELD_LABELS[field] ?? field
+        if (field === 'split_into' && change && typeof change === 'object' && !Array.isArray(change)) {
+          return `Split into: ${Object.entries(change)
+            .map(([side, id]) => `${SIDE_LABELS[side] ?? side} #${id}`)
+            .join(', ')}`
+        }
         if (Array.isArray(change) && change.length === 2) {
           if (field === 'description') return `${label} changed`
           return `${label}: ${fieldValue(field, change[0])} → ${fieldValue(field, change[1])}`

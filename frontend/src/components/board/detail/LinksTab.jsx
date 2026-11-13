@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../../../api/client'
-import { KindBadge, StatusBadge } from '../../Badges'
+import { BlockedBadge, KindBadge, SideBadge, StatusBadge } from '../../Badges'
 import TaskPicker from '../TaskPicker'
-import { LINK_KINDS, LINK_KIND_VERBS, isClosed } from '../../../lib/constants'
+import SplitForm from './SplitForm'
+import { LINK_KINDS, LINK_KIND_VERBS, SIDE_LABELS, isClosed } from '../../../lib/constants'
 import { formatDateTime } from '../../../lib/format'
 import { linkButton, primaryButton, secondaryButton, sectionTitle, smallInputClass } from './ui'
 
@@ -111,13 +112,63 @@ function AddLinkForm({ ctx }) {
   )
 }
 
+/** One part on the parent's roster: side, title, status, people, claim, blockers. */
+function RosterRow({ part, blockedBy, onOpen }) {
+  const people = part.assignees ?? []
+  return (
+    <li className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+      <SideBadge side={part.side} />
+      <TaskRefButton task={part} onOpen={onOpen} />
+      <span className="flex w-full flex-wrap items-center gap-1.5 text-xs text-ink-secondary">
+        {people.length > 0 ? (
+          <span dir="auto">{people.map((p) => `@${p}`).join(' + ')}</span>
+        ) : part.pool ? (
+          <span className="rounded-full border border-series1/30 px-2 py-0.5 text-[11px] font-medium text-series1">
+            Pool{part.side ? `: any ${SIDE_LABELS[part.side] ?? part.side}` : ''}
+          </span>
+        ) : (
+          <span className="text-ink-muted">Unassigned</span>
+        )}
+        {part.claim_holder && <span dir="auto">· claimed by {part.claim_holder}</span>}
+        <BlockedBadge ids={blockedBy} />
+      </span>
+    </li>
+  )
+}
+
 export default function LinksTab({ ctx }) {
-  const { task, isWorker, isReadOnly, closed, busy, run, openTask, startSubtask, onOtherChanged } = ctx
+  const { task, isLead, isWorker, isReadOnly, closed, busy, run, openTask, startSubtask, onOtherChanged } = ctx
   const children = task.children ?? []
   const links = task.links ?? []
   const openChildren = children.filter((child) => !isClosed(child.status)).length
   const canAddSubtask = !isReadOnly && !closed && !task.parent_id && Boolean(startSubtask)
   const canEditLinks = isWorker && !isReadOnly
+  // Mirrors split_task: open, top-level, not a proposal; leads or its workers.
+  const canSplit =
+    !isReadOnly && !closed && !task.parent_id && task.status !== 'proposed' && (isLead || isWorker)
+  const [splitting, setSplitting] = useState(false)
+
+  // TaskRef carries no blockers, so read the parts as list rows for theirs.
+  const [blockersById, setBlockersById] = useState({})
+  const rosterKey = `${task.id}:${task.updated_at}:${children.length}`
+  useEffect(() => {
+    if (children.length === 0) {
+      setBlockersById({})
+      return undefined
+    }
+    let cancelled = false
+    api
+      .tasks({ parent_id: task.id })
+      .then((list) => {
+        if (!cancelled) setBlockersById(Object.fromEntries(list.map((t) => [t.id, t.blocked_by ?? []])))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // rosterKey covers the task and its parts changing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rosterKey])
 
   async function remove(link) {
     const ok = await run(() => api.removeTaskLink(task.id, link.id))
@@ -154,25 +205,36 @@ export default function LinksTab({ ctx }) {
               </span>
             )}
           </h4>
-          {canAddSubtask && (
-            <button type="button" onClick={startSubtask} className={secondaryButton}>
-              Add subtask
-            </button>
-          )}
+          <div className="flex flex-wrap gap-2">
+            {canSplit && !splitting && (
+              <button type="button" onClick={() => setSplitting(true)} className={secondaryButton}>
+                Split by side
+              </button>
+            )}
+            {canAddSubtask && (
+              <button type="button" onClick={startSubtask} className={secondaryButton}>
+                Add subtask
+              </button>
+            )}
+          </div>
         </div>
+        {splitting && <SplitForm ctx={ctx} onDone={() => setSplitting(false)} />}
         {children.length > 0 ? (
           <ul className="mt-1.5 divide-y divide-hairline rounded-lg border border-hairline">
             {children.map((child) => (
-              <li key={child.id} className="flex items-center px-3 py-2 text-sm">
-                <TaskRefButton task={child} onOpen={openTask} />
-              </li>
+              <RosterRow
+                key={child.id}
+                part={child}
+                blockedBy={blockersById[child.id]}
+                onOpen={openTask}
+              />
             ))}
           </ul>
         ) : (
           <p className="mt-1.5 text-sm text-ink-muted">
             {task.parent_id
               ? 'This is a subtask. Subtasks go two levels deep, so it cannot have its own.'
-              : 'No subtasks. Split a task that both frontend and backend touch into one subtask per side.'}
+              : 'No subtasks. Use Split by side when frontend and backend both touch this task.'}
           </p>
         )}
         {openChildren > 0 && (

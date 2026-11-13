@@ -101,7 +101,7 @@ export const api = {
   revokeToken: (id) => request(`/auth/tokens/${id}`, { method: 'DELETE' }),
 
   // filters: { mine, ready, side, tag, q, status_filter, include_closed, created_kind, created_by,
-  //            kind, parent_id, limit }
+  //            kind, parent_id, pool, my_sides, limit }
   tasks: (filters) => request('/tasks', { params: filters }),
   inbox: () => request('/tasks/inbox'),
   task: (id) => request(`/tasks/${id}`),
@@ -112,6 +112,9 @@ export const api = {
   addTaskLink: (id, kind, toTaskId) =>
     request(`/tasks/${id}/links`, { method: 'POST', body: { kind, to_task_id: toTaskId } }),
   removeTaskLink: (id, linkId) => request(`/tasks/${id}/links/${linkId}`, { method: 'DELETE' }),
+  // One subtask per side. payload: { parts: [{side, title, assignee_id, points, criteria}],
+  // order: [{before, after}] }. Returns the parent's detail.
+  splitTask: (id, payload) => request(`/tasks/${id}/split`, { method: 'POST', body: payload }),
   updateTask: (id, payload) => request(`/tasks/${id}`, { method: 'PATCH', body: payload }),
   changeStatus: (id, { status, comment, expectedVersion }) =>
     request(`/tasks/${id}/status`, {

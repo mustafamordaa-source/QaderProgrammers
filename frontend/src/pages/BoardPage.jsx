@@ -41,6 +41,8 @@ export default function BoardPage() {
   const [tagInput, setTagInput] = useState('')
   const [search, setSearch] = useState('')
   const [kind, setKind] = useState('')
+  const [openParts, setOpenParts] = useState(false)
+  const mySides = user?.sides ?? []
   // Leads: show only what agents filed, and tick Triage cards for bulk triage.
   const [fromAgents, setFromAgents] = useState(false)
   const [picked, setPicked] = useState(() => new Set())
@@ -60,6 +62,8 @@ export default function BoardPage() {
         q,
         kind,
         created_kind: fromAgents ? 'agent' : undefined,
+        // Pool parts waiting in To do on a side in the user's "Works on".
+        ...(openParts ? { pool: true, my_sides: true, status_filter: 'to_do' } : {}),
       })
       if (id !== requestId.current) return
       setTasks(list.filter((task) => task.status !== 'dropped'))
@@ -69,7 +73,7 @@ export default function BoardPage() {
     } finally {
       if (id === requestId.current) setLoading(false)
     }
-  }, [mine, side, tag, q, kind, fromAgents])
+  }, [mine, side, tag, q, kind, openParts, fromAgents])
 
   useEffect(() => {
     load()
@@ -231,7 +235,7 @@ export default function BoardPage() {
     await load()
   }
 
-  const filtered = mine || side || tag || q || kind || fromAgents
+  const filtered = mine || side || tag || q || kind || openParts || fromAgents
   const programmers = assignablePeople(people)
 
   return (
@@ -322,6 +326,21 @@ export default function BoardPage() {
             From agents
           </button>
         )}
+        {mySides.length > 0 && !isReadOnly && (
+          <button
+            type="button"
+            aria-pressed={openParts}
+            onClick={() => setOpenParts((v) => !v)}
+            title={`Pool tasks in To do on your sides: ${mySides.map((s) => SIDE_LABELS[s] ?? s).join(', ')}`}
+            className={`rounded-full border px-3 py-1 text-sm transition ${
+              openParts
+                ? 'border-series1 bg-series1/5 text-series1'
+                : 'border-hairline text-ink-secondary hover:text-ink'
+            }`}
+          >
+            Open parts for my sides
+          </button>
+        )}
         {filtered && (
           <button
             type="button"
@@ -331,6 +350,7 @@ export default function BoardPage() {
               setTagInput('')
               setSearch('')
               setKind('')
+              setOpenParts(false)
               setFromAgents(false)
             }}
             className="text-xs text-ink-secondary underline-offset-2 hover:text-ink hover:underline"
