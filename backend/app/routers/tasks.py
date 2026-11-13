@@ -542,6 +542,8 @@ def list_tasks(
     from_bots: bool = Query(default=False, description="Only tasks a bot account filed"),
     kind: TaskKind | None = None,
     parent_id: int | None = None,
+    pool: bool | None = None,
+    my_sides: bool = Query(default=False, description="Only tasks on a side in your Works on"),
     limit: int = Query(default=500, ge=1, le=1000),
 ) -> list[TaskOut]:
     if not auth.has("tasks:read"):
@@ -588,6 +590,10 @@ def list_tasks(
         stmt = stmt.where(Task.kind == kind)
     if parent_id is not None:
         stmt = stmt.where(Task.parent_id == parent_id)
+    if pool is not None:
+        stmt = stmt.where(Task.pool.is_(pool))
+    if my_sides:
+        stmt = stmt.where(Task.side.in_(list(user.sides or [])))
     if q:
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(Task.title.ilike(like), Task.description.ilike(like), Task.summary.ilike(like)))

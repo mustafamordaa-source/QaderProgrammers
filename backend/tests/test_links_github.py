@@ -336,3 +336,13 @@ class TestSplit:
         assert assigned.status_code == 403
         pooled = client.post(f"/tasks/{mine['id']}/split", headers=auth(alice), json={"parts": [{"side": "fe"}]})
         assert pooled.status_code == 201
+
+
+def test_list_filters_pool_parts_for_my_sides(client, auth, leader, alice, db_session):
+    alice.sides = ["fe"]
+    db_session.commit()
+    h = auth(leader)
+    p = client.post("/tasks", headers=h, json={"title": "P"}).json()
+    client.post(f"/tasks/{p['id']}/split", headers=h, json={"parts": [{"side": "fe"}, {"side": "be"}]})
+    rows = client.get("/tasks?pool=true&my_sides=true&status_filter=to_do", headers=auth(alice)).json()
+    assert [r["side"] for r in rows] == ["fe"]
