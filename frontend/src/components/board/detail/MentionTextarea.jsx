@@ -1,5 +1,4 @@
 import { useMemo, useRef, useState } from 'react'
-import { isBot } from '../../../lib/constants'
 
 const MAX_SUGGESTIONS = 6
 
@@ -8,10 +7,11 @@ const MAX_SUGGESTIONS = 6
 // backend/app/notify.py.
 const OPEN_MENTION = /(?:^|[^\w@.])@([a-z0-9_-]{0,39})$/i
 
-/** People who can be mentioned: active humans with a handle, not you. */
+/** People who can be mentioned: active people and bots with a handle, not you.
+ * A tagged bot gets a notification and replies in the thread. */
 export function mentionablePeople(people, user) {
   return (people ?? []).filter(
-    (p) => p.handle && p.is_active !== false && !isBot(p) && p.id !== user?.id,
+    (p) => p.handle && p.is_active !== false && p.id !== user?.id,
   )
 }
 

@@ -6,8 +6,10 @@ the person's notification list; when the person wants email for that kind,
 the row is also queued (`email_state = "pending"`) for the batched sender in
 `app.mailer`.
 
-Nobody is told about their own action. Bots, deactivated people and people
-who cannot see the task are never notified.
+Nobody is told about their own action. Deactivated people and people who
+cannot see the task are never notified. A bot hears only when someone tags
+it (`@handle`) or asks it a question, never by email: its agent polls the
+notification list and replies in that thread.
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ if TYPE_CHECKING:  # pragma: no cover
 # @handle, not inside an email address or a word.
 MENTION_RE = re.compile(r"(?<![\w@.])@([a-z0-9][a-z0-9_-]{1,39})\b", re.IGNORECASE)
 LEAD_ONLY_KINDS = {NotifyKind.review, NotifyKind.proposal}
+# The only kinds a bot receives: the ones that ask it to reply.
+BOT_KINDS = {NotifyKind.mention, NotifyKind.question}
 
 
 def mentioned_handles(text: str | None) -> set[str]:
@@ -66,7 +70,9 @@ def notify(
         if user is None or user.id in seen:
             continue
         seen.add(user.id)
-        if user.id == auth.user.id or user.is_bot or not user.is_active:
+        if user.id == auth.user.id or not user.is_active:
+            continue
+        if user.is_bot and (kind not in BOT_KINDS or auth.user.is_bot):
             continue
         if kind in LEAD_ONLY_KINDS and not user.is_lead:
             continue
@@ -82,7 +88,7 @@ def notify(
             agent_name=auth.agent,
             text=_excerpt(task, text),
             created_at=utcnow(),
-            email_state="pending" if wants_email(user, kind) else "skipped",
+            email_state="pending" if not user.is_bot and wants_email(user, kind) else "skipped",
         )
         db.add(row)
         out.append(row)
