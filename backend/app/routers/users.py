@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.deps import DbSession, require_leader
-from app.models import Role, Task, TaskStatus, User
+from app.models import CLOSED_STATUSES, ApiToken, Role, Task, User, utcnow
 from app.schemas import PasswordReset, UserAdminOut, UserCreate, UserUpdate
 from app.security import hash_password
 
@@ -27,7 +27,7 @@ def _open_task_counts(db: Session) -> dict[int, int]:
     for column in (Task.assignee_1_id, Task.assignee_2_id):
         rows = db.execute(
             select(column, func.count(Task.id))
-            .where(column.is_not(None), Task.status != TaskStatus.done)
+            .where(column.is_not(None), Task.status.not_in(list(CLOSED_STATUSES)))
             .group_by(column)
         ).all()
         for user_id, count in rows:
@@ -56,6 +56,19 @@ def _assert_email_free(db: Session, email: str, *, exclude_id: int | None = None
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"{email} is already registered",
+        )
+
+
+def _assert_handle_free(db: Session, handle: str | None, *, exclude_id: int | None = None) -> None:
+    if not handle:
+        return
+    stmt = select(User).where(User.handle == handle)
+    if exclude_id is not None:
+        stmt = stmt.where(User.id != exclude_id)
+    if db.scalar(stmt) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"The handle '{handle}' is taken",
         )
 
 
@@ -106,6 +119,7 @@ def create_user(
 ) -> UserAdminOut:
     email = payload.email.lower()
     _assert_email_free(db, email)
+    _assert_handle_free(db, payload.handle)
 
     user = User(
         name=payload.name,
@@ -113,6 +127,10 @@ def create_user(
         password_hash=hash_password(payload.password),
         role=payload.role,
         is_active=True,
+        handle=payload.handle,
+        github_login=payload.github_login,
+        sides=[s.value for s in payload.sides or []],
+        wip_limit=payload.wip_limit or 2,
     )
     db.add(user)
     db.commit()
@@ -133,6 +151,10 @@ def update_user(
     if "email" in fields and fields["email"] is not None:
         fields["email"] = fields["email"].lower()
         _assert_email_free(db, fields["email"], exclude_id=user.id)
+    if fields.get("handle"):
+        _assert_handle_free(db, fields["handle"], exclude_id=user.id)
+    if "sides" in fields and fields["sides"] is not None:
+        fields["sides"] = [s.value if hasattr(s, "value") else s for s in fields["sides"]]
 
     _assert_a_leader_remains(
         db,
@@ -142,8 +164,15 @@ def update_user(
     )
 
     for field, value in fields.items():
-        if value is not None:
+        if value is not None or field in {"handle", "github_login"}:
             setattr(user, field, value)
+
+    if fields.get("is_active") is False:
+        # Deactivation also kills every API token the person holds.
+        now = utcnow()
+        for token in db.scalars(select(ApiToken).where(ApiToken.user_id == user.id)):
+            if token.revoked_at is None:
+                token.revoked_at = now
 
     db.commit()
     db.refresh(user)

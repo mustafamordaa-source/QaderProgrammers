@@ -43,8 +43,17 @@ class TestCreation:
             queue = client.get("/tasks", headers=auth(user)).json()
             assert [t["id"] for t in queue] == [body["id"]]
 
-    def test_programmers_cannot_create_tasks(self, client, auth, alice):
-        response = client.post("/tasks", headers=auth(alice), json={"title": "Nope"})
+    def test_members_create_into_the_backlog(self, client, auth, alice):
+        response = client.post(
+            "/tasks", headers=auth(alice), json={"title": "Follow-up", "status": "to_do"}
+        )
+        assert response.status_code == 201
+        assert response.json()["status"] == "backlog"
+
+    def test_members_cannot_assign_what_they_create(self, client, auth, alice, bob):
+        response = client.post(
+            "/tasks", headers=auth(alice), json={"title": "x", "assignee_1_id": bob.id}
+        )
         assert response.status_code == 403
 
     def test_rejects_the_same_assignee_twice(self, client, auth, leader, alice):
@@ -84,22 +93,32 @@ class TestVisibility:
         make_task(title="Unassigned")
         assert len(client.get("/tasks", headers=auth(leader)).json()) == 3
 
-    def test_programmer_sees_only_their_queue(self, client, auth, alice, bob, make_task):
+    def test_members_read_every_open_task(self, client, auth, alice, bob, make_task):
+        # Hand-offs between sides need both sides to read each other's work.
+        make_task(title="Mine", assignee_1=alice)
+        make_task(title="Theirs", assignee_1=bob)
+        assert len(client.get("/tasks", headers=auth(alice)).json()) == 2
+
+    def test_mine_narrows_to_your_queue(self, client, auth, alice, bob, make_task):
         mine = make_task(title="Mine", assignee_1=alice)
         make_task(title="Theirs", assignee_1=bob)
-        queue = client.get("/tasks", headers=auth(alice)).json()
+        queue = client.get("/tasks?mine=true", headers=auth(alice)).json()
         assert [t["id"] for t in queue] == [mine.id]
 
-    def test_programmer_cannot_widen_their_queue_with_a_filter(
-        self, client, auth, alice, bob, make_task
-    ):
-        make_task(title="Theirs", assignee_1=bob)
-        queue = client.get(f"/tasks?assignee_id={bob.id}", headers=auth(alice)).json()
-        assert queue == []
-
-    def test_other_peoples_tasks_are_404_not_403(self, client, auth, alice, bob, make_task):
-        task = make_task(title="Theirs", assignee_1=bob)
+    def test_restricted_tasks_are_404_for_members(self, client, auth, alice, db_session, make_task):
+        task = make_task(title="Hidden", assignee_1=alice)
+        task.restricted = True
+        db_session.commit()
         assert client.get(f"/tasks/{task.id}", headers=auth(alice)).status_code == 404
+        assert client.get("/tasks", headers=auth(alice)).json() == []
+
+    def test_other_peoples_proposals_are_hidden(self, client, auth, alice, bob):
+        created = client.post(
+            "/tasks", headers=auth(alice), json={"title": "Idea", "status": "proposed"}
+        ).json()
+        assert created["status"] == "proposed"
+        assert client.get(f"/tasks/{created['id']}", headers=auth(bob)).status_code == 404
+        assert client.get(f"/tasks/{created['id']}", headers=auth(alice)).status_code == 200
 
     def test_second_assignee_can_open_the_task(self, client, auth, alice, bob, make_task):
         task = make_task(title="Shared", assignee_1=alice, assignee_2=bob)
@@ -112,18 +131,18 @@ class TestStatusChanges:
     ):
         task = make_task(assignee_1=alice, assignee_2=bob)
         first = client.patch(
-            f"/tasks/{task.id}/status", headers=auth(alice), json={"status": "in_progress_back"}
+            f"/tasks/{task.id}/status", headers=auth(alice), json={"status": "in_progress"}
         )
-        assert first.json()["status"] == "in_progress_back"
+        assert first.json()["status"] == "in_progress"
         second = client.patch(
-            f"/tasks/{task.id}/status", headers=auth(bob), json={"status": "in_progress_front"}
+            f"/tasks/{task.id}/status", headers=auth(bob), json={"status": "in_review"}
         )
-        assert second.json()["status"] == "in_progress_front"
+        assert second.json()["status"] == "in_review"
 
     def test_each_change_records_who_made_it(self, client, auth, alice, bob, make_task):
         task = make_task(assignee_1=alice, assignee_2=bob)
         client.patch(
-            f"/tasks/{task.id}/status", headers=auth(alice), json={"status": "in_progress_back"}
+            f"/tasks/{task.id}/status", headers=auth(alice), json={"status": "in_progress"}
         )
         client.patch(
             f"/tasks/{task.id}/status", headers=auth(bob), json={"status": "in_review"}
@@ -150,9 +169,10 @@ class TestStatusChanges:
     def test_non_assignee_cannot_move_a_task(self, client, auth, bob, alice, make_task):
         task = make_task(assignee_1=alice)
         response = client.patch(
-            f"/tasks/{task.id}/status", headers=auth(bob), json={"status": "in_progress_front"}
+            f"/tasks/{task.id}/status", headers=auth(bob), json={"status": "in_progress"}
         )
-        assert response.status_code == 404
+        assert response.status_code == 409
+        assert "assigned to you" in response.json()["detail"]
 
     def test_leader_approval_logs_approved_and_closed(self, client, auth, leader, alice, make_task):
         task = make_task(status=TaskStatus.in_review, assignee_1=alice)
@@ -180,7 +200,7 @@ class TestStatusChanges:
         bare = client.patch(
             f"/tasks/{task.id}/status",
             headers=auth(leader),
-            json={"status": "in_progress_front"},
+            json={"status": "in_progress"},
         )
         assert bare.status_code == 422
 
@@ -191,11 +211,11 @@ class TestStatusChanges:
         response = client.patch(
             f"/tasks/{task.id}/status",
             headers=auth(leader),
-            json={"status": "in_progress_front", "comment": "needs tests"},
+            json={"status": "in_progress", "comment": "needs tests"},
         )
         assert response.status_code == 200
         assert _events(client, auth(leader), task.id) == [
-            ("rejected", "in_review", "in_progress_front")
+            ("rejected", "in_review", "in_progress")
         ]
 
     def test_missing_task_is_404(self, client, auth, leader):
@@ -211,17 +231,17 @@ class TestRejectEndpoint:
         response = client.post(
             f"/tasks/{task.id}/reject",
             headers=auth(leader),
-            json={"to_status": "in_progress_back", "comment": "Missing tests"},
+            json={"to_status": "in_progress", "comment": "Missing tests"},
         )
         assert response.status_code == 200
-        assert response.json()["status"] == "in_progress_back"
+        assert response.json()["status"] == "in_progress"
         events = response.json()["events"]
         assert events[-1]["event_type"] == "rejected"
         assert events[-1]["comment"] == "Missing tests"
 
     def test_comment_is_required(self, client, auth, leader, alice, make_task):
         task = make_task(status=TaskStatus.in_review, assignee_1=alice)
-        for payload in ({"to_status": "in_progress_back"}, {"to_status": "in_progress_back", "comment": "  "}):
+        for payload in ({"to_status": "in_progress"}, {"to_status": "in_progress", "comment": "  "}):
             response = client.post(f"/tasks/{task.id}/reject", headers=auth(leader), json=payload)
             assert response.status_code == 422
 
@@ -230,7 +250,7 @@ class TestRejectEndpoint:
         response = client.post(
             f"/tasks/{task.id}/reject",
             headers=auth(alice),
-            json={"to_status": "in_progress_back", "comment": "x"},
+            json={"to_status": "in_progress", "comment": "x"},
         )
         assert response.status_code == 403
 
@@ -239,7 +259,7 @@ class TestRejectEndpoint:
         response = client.post(
             f"/tasks/{task.id}/reject",
             headers=auth(leader),
-            json={"to_status": "in_progress_back", "comment": "x"},
+            json={"to_status": "in_progress", "comment": "x"},
         )
         assert response.status_code == 409
 
@@ -272,8 +292,8 @@ class TestAssignment:
         client.patch(
             f"/tasks/{task.id}/assign", headers=auth(leader), json={"assignee_1_id": bob.id}
         )
-        assert client.get("/tasks", headers=auth(alice)).json() == []
-        assert len(client.get("/tasks", headers=auth(bob)).json()) == 1
+        assert client.get("/tasks?mine=true", headers=auth(alice)).json() == []
+        assert len(client.get("/tasks?mine=true", headers=auth(bob)).json()) == 1
 
     def test_programmers_cannot_reassign(self, client, auth, alice, bob, make_task):
         task = make_task(assignee_1=alice)

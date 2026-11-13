@@ -34,6 +34,20 @@ def _fast_password_hashing(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _relaxed_rate_limits(monkeypatch):
+    """Tests log in many times; the rate-limit tests lower these again."""
+    from app import ratelimit
+    from app.config import settings
+
+    ratelimit.reset()
+    monkeypatch.setattr(settings, "rate_login_per_minute", 10_000)
+    monkeypatch.setattr(settings, "rate_token_reads_per_minute", 10_000)
+    monkeypatch.setattr(settings, "rate_token_writes_per_minute", 10_000)
+    yield
+    ratelimit.reset()
+
+
 @pytest.fixture()
 def db_session():
     # StaticPool keeps every connection pointed at the same in-memory database,

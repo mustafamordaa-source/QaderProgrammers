@@ -1,4 +1,8 @@
-"""FastAPI application entry point."""
+"""FastAPI application entry point.
+
+The schema is managed by Alembic. Run `python migrate.py` before starting the
+server (the Docker image does this on every start).
+"""
 
 from __future__ import annotations
 
@@ -6,18 +10,20 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.config import settings
-from app.database import Base, engine
+from app.config import check_production_settings, settings
 from app.routers import auth, kpi, tasks, users
 
-# The schema is small and additive; create_all keeps local setup to one command.
-# Swap in Alembic if this ever needs real migrations.
-Base.metadata.create_all(bind=engine)
+# Refuse to start in production with a public or short signing key.
+check_production_settings(settings)
 
 app = FastAPI(
     title="TaskFlow API",
-    description="Internal task management and KPI tracking for a small software team.",
-    version="1.0.0",
+    description=(
+        "Task tracking for a small team and its AI agents. Agents authenticate "
+        "with a personal API token (`Authorization: Bearer qhub_...`) and name "
+        "themselves in the `X-Agent` header on writes."
+    ),
+    version="2.0.0",
 )
 
 app.add_middleware(

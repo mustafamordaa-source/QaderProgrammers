@@ -28,7 +28,14 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import EventType, Role, Task, TaskStatus, User
+from app.models import (
+    EventType,
+    Role,
+    Task,
+    TaskStatus,
+    User,
+    normalise_status,
+)
 from app.schemas import (
     KpiReport,
     OnTimeKpi,
@@ -38,12 +45,25 @@ from app.schemas import (
     VolumeKpi,
 )
 
-# Statuses we report dwell time for. `done` is terminal, so it has no duration.
+# Statuses we report dwell time for. Closed statuses have no duration. Legacy
+# in-progress values in old events fold into `in_progress`. Waiting time
+# (blocked, needs_confirm) gets its own buckets so it does not inflate work time.
 TRACKED_STATUSES: tuple[TaskStatus, ...] = (
     TaskStatus.to_do,
-    TaskStatus.in_progress_front,
-    TaskStatus.in_progress_back,
+    TaskStatus.in_progress,
     TaskStatus.in_review,
+    TaskStatus.blocked,
+    TaskStatus.needs_confirm,
+)
+
+# Statuses reported in the open-work breakdown.
+OPEN_STATUSES: tuple[TaskStatus, ...] = (
+    TaskStatus.backlog,
+    TaskStatus.to_do,
+    TaskStatus.in_progress,
+    TaskStatus.in_review,
+    TaskStatus.blocked,
+    TaskStatus.needs_confirm,
 )
 
 DEFAULT_RANGE_DAYS = 90
@@ -107,9 +127,10 @@ def _status_intervals(task: Task) -> list[_Interval]:
     for event in sorted(task.events, key=lambda e: (e.timestamp, e.id)):
         if event.to_status is None:
             continue
-        if points and points[-1][0] == event.to_status:
+        to_status = normalise_status(event.to_status)
+        if points and points[-1][0] == to_status:
             continue
-        points.append((event.to_status, event.timestamp))
+        points.append((to_status, event.timestamp))
 
     intervals: list[_Interval] = []
     for (status, start), (_, end) in zip(points, points[1:]):
@@ -214,9 +235,10 @@ def compute_metrics(
                 if closed.timestamp <= task.due_date:
                     on_time += 1
 
-        if task.status is not TaskStatus.done:
-            open_by_status[task.status.value] += 1
-            open_points_by_status[task.status.value] += task.points
+        current = normalise_status(task.status)
+        if current in OPEN_STATUSES:
+            open_by_status[current.value] += 1
+            open_points_by_status[current.value] += task.points
 
     speed = SpeedKpi(
         avg_cycle_time_hours=_mean(cycle_hours),
@@ -241,19 +263,13 @@ def compute_metrics(
         completed_total=completed_total,
         completed_per_week=dict(sorted(per_week.items())),
         completed_per_month=dict(sorted(per_month.items())),
-        open_by_status={
-            s.value: open_by_status.get(s.value, 0)
-            for s in TaskStatus
-            if s is not TaskStatus.done
-        },
+        open_by_status={s.value: open_by_status.get(s.value, 0) for s in OPEN_STATUSES},
         open_total=sum(open_by_status.values()),
         points_completed=completed_points_total,
         points_per_week=dict(sorted(points_per_week.items())),
         points_per_month=dict(sorted(points_per_month.items())),
         open_points_by_status={
-            s.value: open_points_by_status.get(s.value, 0)
-            for s in TaskStatus
-            if s is not TaskStatus.done
+            s.value: open_points_by_status.get(s.value, 0) for s in OPEN_STATUSES
         },
         open_points_total=sum(open_points_by_status.values()),
         avg_points_per_task=(

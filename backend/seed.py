@@ -5,30 +5,33 @@ the People screen. It deliberately creates no sample programmers and no sample
 tasks — the dashboards start empty and fill with real work.
 
 Usage:
-    python seed.py                  # create the DB if needed, refuse to duplicate
-    python seed.py --reset          # drop everything and start over
-    python seed.py --password '...' # set the leader's password explicitly
+    python seed.py --email you@example.com --name "Your Name"
+    python seed.py --password '...'   # pick the password yourself (else a random one)
+    python seed.py --reset            # local only: drop everything and start over
+
+There is no default password. Without --password the script generates a random
+one and prints it once.
 """
 
 from __future__ import annotations
 
 import argparse
+import secrets
 
 from sqlalchemy import select
 
+from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.models import Role, User
+from app.schemas import MIN_PASSWORD_LENGTH
 from app.security import hash_password
-
-DEFAULT_PASSWORD = "password123"
-
-LEADER = {"name": "Mustafa Mordaa", "email": "leader@qader.dev"}
+from migrate import upgrade
 
 
-def create_leader(db, password: str) -> User:
+def create_leader(db, *, name: str, email: str, password: str) -> User:
     leader = User(
-        name=LEADER["name"],
-        email=LEADER["email"],
+        name=name,
+        email=email.lower(),
         password_hash=hash_password(password),
         role=Role.leader,
         is_active=True,
@@ -39,35 +42,42 @@ def create_leader(db, password: str) -> User:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--reset", action="store_true", help="drop all tables first")
-    parser.add_argument(
-        "--password",
-        default=DEFAULT_PASSWORD,
-        help="password for the leader account (default: %(default)s)",
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--reset", action="store_true", help="drop all tables first (refused in production)")
+    parser.add_argument("--email", default="leader@example.com", help="the leader's login email")
+    parser.add_argument("--name", default="Team Leader", help="the leader's display name")
+    parser.add_argument("--password", default=None, help="the leader's password (default: random)")
     args = parser.parse_args()
 
     if args.reset:
+        if settings.app_env.lower() == "production":
+            raise SystemExit("--reset is refused in production: it deletes every task and event.")
         Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
+        with engine.begin() as conn:
+            conn.exec_driver_sql("DROP TABLE IF EXISTS alembic_version")
+    upgrade()
+
+    password = args.password or secrets.token_urlsafe(12)
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise SystemExit(f"The password needs at least {MIN_PASSWORD_LENGTH} characters.")
 
     db = SessionLocal()
     try:
         if db.scalar(select(User).limit(1)) is not None:
-            print("Database already has users. Re-run with --reset to rebuild it.")
+            print("Database already has users. Nothing to do.")
             return
 
-        create_leader(db, args.password)
+        create_leader(db, name=args.name, email=args.email, password=password)
         db.commit()
 
         print("Seeded the database with the leader account.\n")
-        print(f"  Email     {LEADER['email']}")
-        # Printed here because the login screen no longer hints at any
-        # credentials — this is the only place the password is surfaced.
-        print(f"  Password  {args.password}")
-        if args.password == DEFAULT_PASSWORD:
-            print("\n  Change this after signing in, or pass --password next time.")
+        print(f"  Email     {args.email.lower()}")
+        if args.password:
+            print("  Password  (the one you passed)")
+        else:
+            # Printed once, to this terminal only. Not logged anywhere else.
+            print(f"  Password  {password}")
+            print("\n  Store it in your password manager now; it is not shown again.")
         print("\nAdd the rest of the team from the People screen once you are in.")
     finally:
         db.close()

@@ -57,7 +57,7 @@ def test_role_guard_blocks_programmers_from_leader_routes(client, auth, alice):
     responses = {
         "/kpi/team": client.get("/kpi/team", headers=headers),
         "/kpi/programmer/1": client.get("/kpi/programmer/1", headers=headers),
-        "/tasks": client.post("/tasks", headers=headers, json={"title": "x"}),
+        "/users": client.get("/users", headers=headers),
     }
     for path, response in responses.items():
         assert response.status_code == 403, f"{path} returned {response.status_code}"
