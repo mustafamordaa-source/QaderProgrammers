@@ -4,7 +4,8 @@ import { useAuth } from '../auth/AuthContext'
 import KanbanBoard from '../components/board/KanbanBoard'
 import CreateTaskModal from '../components/board/CreateTaskModal'
 import TaskDetailModal from '../components/board/TaskDetailModal'
-import { SIDES, SIDE_LABELS } from '../lib/constants'
+import TriageBar from '../components/board/TriageBar'
+import { SIDES, SIDE_LABELS, assignablePeople } from '../lib/constants'
 
 const controlClass =
   'rounded-lg border border-hairline bg-surface-raised px-3 py-1.5 text-sm outline-none focus:border-series1'
@@ -20,7 +21,7 @@ function useDebounced(value, delay = 300) {
 }
 
 export default function BoardPage() {
-  const { user, isLeader, isViewer } = useAuth()
+  const { user, isLead, isReadOnly } = useAuth()
   const [tasks, setTasks] = useState([])
   const [people, setPeople] = useState([])
   const [selected, setSelected] = useState(null)
@@ -33,6 +34,9 @@ export default function BoardPage() {
   const [side, setSide] = useState('')
   const [tagInput, setTagInput] = useState('')
   const [search, setSearch] = useState('')
+  // Leads: show only what agents filed, and tick Triage cards for bulk triage.
+  const [fromAgents, setFromAgents] = useState(false)
+  const [picked, setPicked] = useState(() => new Set())
   const tag = useDebounced(tagInput.trim())
   const q = useDebounced(search.trim())
 
@@ -42,7 +46,13 @@ export default function BoardPage() {
   const load = useCallback(async () => {
     const id = ++requestId.current
     try {
-      const list = await api.tasks({ mine: mine || undefined, side, tag, q })
+      const list = await api.tasks({
+        mine: mine || undefined,
+        side,
+        tag,
+        q,
+        created_kind: fromAgents ? 'agent' : undefined,
+      })
       if (id !== requestId.current) return
       setTasks(list.filter((task) => task.status !== 'dropped'))
       setError(null)
@@ -51,7 +61,7 @@ export default function BoardPage() {
     } finally {
       if (id === requestId.current) setLoading(false)
     }
-  }, [mine, side, tag, q])
+  }, [mine, side, tag, q, fromAgents])
 
   useEffect(() => {
     load()
@@ -100,13 +110,47 @@ export default function BoardPage() {
   async function handleCreate(payload) {
     const created = await api.createTask(payload)
     applyUpdate(created)
-    if (!isLeader) {
-      setNotice(`Task #${created.id} is in the backlog. A leader will triage it.`)
+    if (!isLead) {
+      setNotice(`Task #${created.id} is in the backlog. A lead will triage it.`)
     }
   }
 
-  const filtered = mine || side || tag || q
-  const programmers = people.filter((person) => person.role === 'programmer')
+  // Keep only ticks on tasks still waiting in Triage.
+  useEffect(() => {
+    setPicked((current) => {
+      const waiting = new Set(tasks.filter((t) => t.status === 'proposed').map((t) => t.id))
+      const next = new Set([...current].filter((id) => waiting.has(id)))
+      return next.size === current.size ? current : next
+    })
+  }, [tasks])
+
+  function selectOne(task, on) {
+    setPicked((current) => {
+      const next = new Set(current)
+      if (on) next.add(task.id)
+      else next.delete(task.id)
+      return next
+    })
+  }
+
+  function selectMany(list, on) {
+    setPicked((current) => {
+      const next = new Set(current)
+      for (const task of list) {
+        if (on) next.add(task.id)
+        else next.delete(task.id)
+      }
+      return next
+    })
+  }
+
+  async function handleTriaged(okIds) {
+    setPicked((current) => new Set([...current].filter((id) => !okIds.includes(id))))
+    await load()
+  }
+
+  const filtered = mine || side || tag || q || fromAgents
+  const programmers = assignablePeople(people)
 
   return (
     <>
@@ -114,15 +158,15 @@ export default function BoardPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Team board</h1>
           <p className="mt-0.5 text-sm text-ink-secondary">
-            {isLeader
-              ? 'Every task across the team. Only you can triage, approve and drop work.'
-              : isViewer
+            {isLead
+              ? 'Every task across the team. Leads triage, approve and drop work.'
+              : isReadOnly
                 ? 'Read-only view of the team’s work.'
                 : 'The team’s work. You can move tasks assigned to you and pool tasks you claimed.'}
           </p>
         </div>
 
-        {!isViewer && (
+        {!isReadOnly && (
           <button
             type="button"
             onClick={() => setCreating(true)}
@@ -168,6 +212,21 @@ export default function BoardPage() {
           onChange={(event) => setSearch(event.target.value)}
           className={`${controlClass} w-56`}
         />
+        {isLead && (
+          <button
+            type="button"
+            aria-pressed={fromAgents}
+            onClick={() => setFromAgents((v) => !v)}
+            title="Only tasks an agent filed, for triage"
+            className={`rounded-full border px-3 py-1 text-sm transition ${
+              fromAgents
+                ? 'border-series2 bg-series2/5 text-series2'
+                : 'border-hairline text-ink-secondary hover:text-ink'
+            }`}
+          >
+            From agents
+          </button>
+        )}
         {filtered && (
           <button
             type="button"
@@ -176,6 +235,7 @@ export default function BoardPage() {
               setSide('')
               setTagInput('')
               setSearch('')
+              setFromAgents(false)
             }}
             className="text-xs text-ink-secondary underline-offset-2 hover:text-ink hover:underline"
           >
@@ -201,16 +261,35 @@ export default function BoardPage() {
         <div className="rounded-xl border border-dashed border-hairline px-6 py-12 text-center">
           <p className="text-sm font-medium">No tasks yet.</p>
           <p className="mt-1 text-sm text-ink-muted">
-            {isViewer ? 'Work will show up here once the team adds it.' : 'Create the first one to get the board moving.'}
+            {isReadOnly ? 'Work will show up here once the team adds it.' : 'Create the first one to get the board moving.'}
           </p>
         </div>
       ) : (
-        <KanbanBoard tasks={tasks} user={user} onOpenTask={openTask} onMove={handleMove} />
+        <>
+          {isLead && (
+            <TriageBar
+              tasks={tasks}
+              selectedIds={picked}
+              programmers={programmers}
+              onClear={() => setPicked(new Set())}
+              onDone={handleTriaged}
+            />
+          )}
+          <KanbanBoard
+            tasks={tasks}
+            user={user}
+            onOpenTask={openTask}
+            onMove={handleMove}
+            selectedIds={picked}
+            onSelect={isLead ? selectOne : null}
+            onSelectMany={isLead ? selectMany : null}
+          />
+        </>
       )}
 
       {creating && (
         <CreateTaskModal
-          role={user.role}
+          isLead={isLead}
           programmers={programmers}
           onClose={() => setCreating(false)}
           onCreate={handleCreate}

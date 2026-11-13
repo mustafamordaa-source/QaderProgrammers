@@ -22,8 +22,7 @@ const STATUS_HINTS = {
   to_do: 'Planned and ready to pick up.',
 }
 
-export default function CreateTaskModal({ role, programmers, onClose, onCreate }) {
-  const isLeader = role === 'leader'
+export default function CreateTaskModal({ isLead, programmers, onClose, onCreate }) {
   const [form, setForm] = useState({
     title: '',
     description: '',
@@ -65,7 +64,7 @@ export default function CreateTaskModal({ role, programmers, onClose, onCreate }
         .map((line) => line.trim())
         .filter(Boolean),
     }
-    if (isLeader) {
+    if (isLead) {
       Object.assign(payload, {
         status: form.status,
         assignee_1_id: form.assignee_1_id ? Number(form.assignee_1_id) : null,
@@ -94,9 +93,9 @@ export default function CreateTaskModal({ role, programmers, onClose, onCreate }
   return (
     <Modal title="Create task" onClose={onClose} wide>
       <form onSubmit={handleSubmit}>
-        {!isLeader && (
+        {!isLead && (
           <p className="mb-4 rounded-lg border border-hairline bg-surface-raised px-3 py-2 text-sm text-ink-secondary">
-            Your task goes to the backlog. A leader triages it, assigns it and plans it.
+            Your task goes to the backlog. A lead triages it, assigns it and plans it.
           </p>
         )}
 
@@ -227,7 +226,7 @@ export default function CreateTaskModal({ role, programmers, onClose, onCreate }
           <PointsPicker value={form.points} onChange={(points) => update('points', points)} />
         </div>
 
-        {isLeader && (
+        {isLead && (
           <>
             <fieldset className="mt-4">
               <legend className="text-sm font-medium">Starts in</legend>
@@ -317,7 +316,7 @@ export default function CreateTaskModal({ role, programmers, onClose, onCreate }
                 />
                 <span>
                   Restricted
-                  <span className="block text-xs text-ink-muted">Only leaders can see it.</span>
+                  <span className="block text-xs text-ink-muted">Only leads can see it.</span>
                 </span>
               </label>
               <label className="flex items-start gap-2">

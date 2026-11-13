@@ -63,10 +63,10 @@ export const STATUS_STYLES = {
 }
 
 // Board columns. "Waiting" holds both parking statuses; "Triage" is for
-// leaders only. Dropped tasks are not shown. A drop on a column targets the
+// leads and admins only. Dropped tasks are not shown. A drop on a column targets the
 // first of its statuses that the move allows.
 export const BOARD_COLUMNS = [
-  { key: 'triage', label: 'Triage', statuses: ['proposed'], leaderOnly: true },
+  { key: 'triage', label: 'Triage', statuses: ['proposed'], leadOnly: true },
   { key: 'backlog', label: 'Backlog', statuses: ['backlog'] },
   { key: 'to_do', label: 'To do', statuses: ['to_do'] },
   { key: 'in_progress', label: 'In progress', statuses: ['in_progress'] },
@@ -122,13 +122,13 @@ export function reachableTargets(current, resumeStatus) {
 /**
  * Statuses this person may move the task to. Mirrors check_transition.
  * `isWorker` is true for assignees and for the holder of a live claim on a
- * pool task; leaders may move anything.
+ * pool task; leads and admins may move anything.
  */
-export function allowedTargets(task, role, isWorker) {
+export function allowedTargets(task, user, isWorker) {
   if (!task || CLOSED.has(task.status)) return []
   const targets = reachableTargets(task.status, task.resume_status)
-  if (role === 'leader') return targets
-  if (role !== 'programmer' || !isWorker) return []
+  if (hasLeadRights(user)) return targets
+  if (!hasMemberRights(user) || !isWorker) return []
   return targets.filter(
     (target) =>
       !LEADER_ONLY_TARGETS.has(target) &&
@@ -162,24 +162,27 @@ export function claimIsLive(task, now = Date.now()) {
 /** May `user` work on (not only read) this task? Mirrors _is_worker. */
 export function isWorkerOn(task, user) {
   if (!task || !user) return false
-  if (user.role === 'leader') return true
-  if (user.role !== 'programmer') return false
+  if (hasLeadRights(user)) return true
+  if (!hasMemberRights(user)) return false
   if (task.assignee_1_id === user.id || task.assignee_2_id === user.id) return true
   return Boolean(task.pool && task.claimed_by === user.id && claimIsLive(task))
 }
 
 /** May `user` claim this task now? Mirrors claim_task. */
 export function canClaim(task, user) {
-  if (!task || !user || user.role === 'viewer') return false
+  if (!task || !user || isReadOnlyUser(user)) return false
   if (!['to_do', 'in_progress'].includes(task.status)) return false
-  if (user.role === 'leader') return true
+  if (hasLeadRights(user)) return true
   return task.assignee_1_id === user.id || task.assignee_2_id === user.id || Boolean(task.pool)
 }
 
 // Statuses a leader may pick when creating a task. Members land in backlog.
 export const CREATE_STATUSES = ['proposed', 'backlog', 'to_do']
 
-export const SIDES = ['fe', 'be', 'mobile', 'content', 'infra', 'qa', 'other']
+export const SIDES = ['fe', 'be', 'mobile', 'content', 'infra', 'qa', 'design', 'other']
+
+// "Works on" for a person. `other` is a task side only.
+export const PERSON_SIDES = ['fe', 'be', 'mobile', 'content', 'infra', 'qa', 'design']
 
 export const SIDE_LABELS = {
   fe: 'Frontend',
@@ -188,15 +191,77 @@ export const SIDE_LABELS = {
   content: 'Content',
   infra: 'Infra',
   qa: 'QA',
+  design: 'Design',
   other: 'Other',
 }
 
-export const ROLES = ['programmer', 'leader', 'viewer']
+// Access roles. Mirrors AccessRole in backend/app/models.py. Rights add up;
+// admin includes lead rights; viewer counts only when nothing else is held.
+export const ACCESS_ROLES = ['admin', 'lead', 'member', 'viewer']
 
 export const ROLE_LABELS = {
-  leader: 'Leader',
-  programmer: 'Member',
+  admin: 'Admin',
+  lead: 'Lead',
+  member: 'Member',
   viewer: 'Viewer',
+}
+
+export const ROLE_HINTS = {
+  admin: 'Everything a lead can do, plus people, bot accounts and everyone’s tokens.',
+  lead: 'Triage, assign, approve, reject and drop work; sees restricted tasks.',
+  member: 'Can be assigned, claims tasks, moves and documents their own work.',
+  viewer: 'Reads only. Ignored when another role is ticked.',
+}
+
+// The old single `role` column, for rows or clients that lack `roles`.
+const LEGACY_ROLES = {
+  leader: ['admin', 'lead'],
+  programmer: ['member'],
+  viewer: ['viewer'],
+}
+
+/** The person's access roles, deduplicated and ordered like the server does. */
+export function rolesOf(user) {
+  if (!user) return []
+  const raw =
+    Array.isArray(user.roles) && user.roles.length ? user.roles : LEGACY_ROLES[user.role] ?? []
+  const wanted = new Set(raw)
+  if ([...wanted].some((r) => r !== 'viewer')) wanted.delete('viewer')
+  return ACCESS_ROLES.filter((r) => wanted.has(r))
+}
+
+export function hasAdminRights(user) {
+  return rolesOf(user).includes('admin')
+}
+
+export function hasLeadRights(user) {
+  const roles = rolesOf(user)
+  return roles.includes('lead') || roles.includes('admin')
+}
+
+export function hasMemberRights(user) {
+  return rolesOf(user).includes('member')
+}
+
+export function isReadOnlyUser(user) {
+  return !hasLeadRights(user) && !hasMemberRights(user)
+}
+
+export function isBot(user) {
+  return user?.account_type === 'bot'
+}
+
+/** People a task can go to: active members. Bots propose work; the UI does
+ *  not offer them as assignees. */
+export function assignablePeople(people) {
+  return (people ?? []).filter((p) => hasMemberRights(p) && p.is_active !== false && !isBot(p))
+}
+
+// Scopes an admin may give a bot token. Mirrors BOT_SCOPES in backend/app/deps.py.
+export const BOT_SCOPES = {
+  'tasks:read': 'Read the tasks it can see',
+  'tasks:propose': 'File proposals for a lead to triage',
+  'comments:write': 'Comment on its own proposals',
 }
 
 export const COMMENT_KINDS = ['note', 'question', 'answer', 'decision', 'review', 'handback']
@@ -334,6 +399,62 @@ export const EVENT_LABELS = {
   git_linked: 'linked git work',
   deployed: 'changed the deploy state',
   dropped: 'dropped it',
+  triaged: 'triaged it',
+  doc_saved: 'saved a document',
+  file_added: 'attached a file',
+  file_removed: 'removed a file',
+  context_added: 'added a context link',
+  context_removed: 'removed a context link',
+}
+
+// Documents. Mirrors DocKind in backend/app/models.py.
+export const DOC_KINDS = ['spec', 'plan', 'notes', 'test_plan', 'decision', 'handover', 'other']
+
+export const DOC_KIND_LABELS = {
+  spec: 'Spec',
+  plan: 'Plan',
+  notes: 'Notes',
+  test_plan: 'Test plan',
+  decision: 'Decision',
+  handover: 'Hand-over',
+  other: 'Other',
+}
+
+// Attachments. Mirrors ALLOWED_FILES and file_max_mb in backend/app/routers/docs.py.
+export const FILE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf', '.txt', '.md', '.csv', '.json', '.log']
+export const FILE_MAX_MB = 10
+export const IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+
+export const LIBRARY_KIND_LABELS = {
+  hub_doc: 'Hub document',
+  repo_path: 'Repo file',
+  url: 'Web page',
+}
+
+/** https://github.com/{repo}/blob/{ref or HEAD}/{path}, each part encoded. */
+export function githubBlobUrl(repo, ref, path) {
+  if (!repo || !path || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return null
+  const cleanPath = path.split('/').filter(Boolean).map(encodeURIComponent).join('/')
+  const cleanRef = (ref || 'HEAD').split('/').map(encodeURIComponent).join('/')
+  return `https://github.com/${repo}/blob/${cleanRef}/${cleanPath}`
+}
+
+/** Only https links leave the app. */
+export function safeHttpsUrl(url) {
+  if (typeof url !== 'string') return null
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' ? parsed.href : null
+  } catch {
+    return null
+  }
+}
+
+export function formatBytes(size) {
+  if (size === null || size === undefined) return '—'
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
 /** Split "a, b\nc" into a clean list without repeats. */

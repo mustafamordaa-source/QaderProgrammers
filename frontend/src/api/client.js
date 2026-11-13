@@ -1,4 +1,4 @@
-// Thin fetch wrapper. The dev server proxies /auth, /tasks, /users and /kpi to the
+// Thin fetch wrapper. The dev server proxies /auth, /tasks, /users, /kpi and /library to the
 // backend, so a relative base URL works without CORS in development; set
 // VITE_API_URL to point a production build at a different origin.
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -37,7 +37,7 @@ function readDetail(body, fallback) {
   return fallback
 }
 
-async function request(path, { method = 'GET', body, params } = {}) {
+async function request(path, { method = 'GET', body, params, form, as = 'json' } = {}) {
   const url = new URL(`${BASE_URL}${path}`, window.location.origin)
   if (params) {
     for (const [key, value] of Object.entries(params)) {
@@ -51,13 +51,18 @@ async function request(path, { method = 'GET', body, params } = {}) {
   const response = await fetch(url, {
     method,
     headers: {
+      // FormData sets its own multipart boundary; never set it by hand.
       ...(body ? { 'Content-Type': 'application/json' } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: form ?? (body ? JSON.stringify(body) : undefined),
   })
 
   if (response.status === 204) return null
+
+  // Plain-text and binary answers (diffs, downloads). Errors still come as JSON.
+  if (response.ok && as === 'text') return response.text()
+  if (response.ok && as === 'blob') return response.blob()
 
   let payload = null
   try {
@@ -83,7 +88,8 @@ export function isVersionConflict(err) {
 export const api = {
   login: (email, password) => request('/auth/login', { method: 'POST', body: { email, password } }),
   me: () => request('/auth/me'),
-  programmers: () => request('/auth/users', { params: { role: 'programmer' } }),
+  // Active people who can be assigned work. `side` narrows to one "works on".
+  programmers: (side) => request('/auth/users', { params: { role: 'member', side } }),
   // Every active person, for question addressees and name lookups.
   directory: () => request('/auth/users'),
 
@@ -93,7 +99,7 @@ export const api = {
   createToken: (payload) => request('/auth/tokens', { method: 'POST', body: payload }),
   revokeToken: (id) => request(`/auth/tokens/${id}`, { method: 'DELETE' }),
 
-  // filters: { mine, ready, side, tag, q, status_filter, include_closed }
+  // filters: { mine, ready, side, tag, q, status_filter, include_closed, created_kind, created_by }
   tasks: (filters) => request('/tasks', { params: filters }),
   inbox: () => request('/tasks/inbox'),
   task: (id) => request(`/tasks/${id}`),
@@ -129,12 +135,49 @@ export const api = {
 
   addGitLink: (id, payload) => request(`/tasks/${id}/git`, { method: 'POST', body: payload }),
 
-  // Leader-only user management.
+  // Leads: accept or drop many proposals at once. Returns [{id, ok, status, error}].
+  triage: (payload) => request('/tasks/triage', { method: 'POST', body: payload }),
+
+  // Documents (versioned Markdown on a task).
+  docs: (id) => request(`/tasks/${id}/docs`),
+  doc: (id, slug, version) =>
+    request(`/tasks/${id}/docs/${encodeURIComponent(slug)}`, { params: { version } }),
+  createDoc: (id, payload) => request(`/tasks/${id}/docs`, { method: 'POST', body: payload }),
+  saveDoc: (id, slug, payload) =>
+    request(`/tasks/${id}/docs/${encodeURIComponent(slug)}`, { method: 'PUT', body: payload }),
+  docHistory: (id, slug) => request(`/tasks/${id}/docs/${encodeURIComponent(slug)}/history`),
+  docDiff: (id, slug, from, to) =>
+    request(`/tasks/${id}/docs/${encodeURIComponent(slug)}/diff`, { params: { from, to }, as: 'text' }),
+  restoreDoc: (id, slug, n) =>
+    request(`/tasks/${id}/docs/${encodeURIComponent(slug)}/restore/${n}`, { method: 'POST' }),
+
+  // Attachments. Downloads need the Authorization header, so they come back as
+  // a Blob for an object URL instead of a plain link.
+  uploadFile: (id, file, note) => {
+    const form = new FormData()
+    form.append('upload', file)
+    if (note) form.append('note', note)
+    return request(`/tasks/${id}/files`, { method: 'POST', form })
+  },
+  fileBlob: (id, fileId) => request(`/tasks/${id}/files/${fileId}`, { as: 'blob' }),
+  removeFile: (id, fileId) => request(`/tasks/${id}/files/${fileId}`, { method: 'DELETE' }),
+
+  // Context links: repo files and pages to read more.
+  addContext: (id, payload) => request(`/tasks/${id}/context`, { method: 'POST', body: payload }),
+  removeContext: (id, contextId) =>
+    request(`/tasks/${id}/context/${contextId}`, { method: 'DELETE' }),
+
+  // Everything written down: hub documents and linked repo files and pages.
+  library: (filters) => request('/library', { params: filters }),
+
+  // People. Leads and admins list; only admins change anything.
   adminUsers: () => request('/users'),
   createUser: (payload) => request('/users', { method: 'POST', body: payload }),
   updateUser: (id, payload) => request(`/users/${id}`, { method: 'PATCH', body: payload }),
   resetPassword: (id, password) =>
     request(`/users/${id}/password`, { method: 'POST', body: { password } }),
+  botTokens: (id) => request(`/users/${id}/tokens`),
+  issueBotToken: (id, payload) => request(`/users/${id}/tokens`, { method: 'POST', body: payload }),
 
   teamKpi: (range) => request('/kpi/team', { params: range }),
   myKpi: (range) => request('/kpi/me', { params: range }),

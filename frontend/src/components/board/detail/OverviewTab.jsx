@@ -9,6 +9,7 @@ import {
   PRIORITY_LABELS,
   SIDES,
   SIDE_LABELS,
+  assignablePeople,
   canClaim,
   claimIsLive,
   splitList,
@@ -44,7 +45,7 @@ function personName(person) {
 
 /** Edit form. Leaders edit everything; workers edit summary, tags, areas and side. */
 function EditForm({ ctx, programmers, onDone }) {
-  const { task, isLeader, busy, run } = ctx
+  const { task, isLead, busy, run } = ctx
   const [form, setForm] = useState({
     title: task.title,
     description: task.description ?? '',
@@ -75,7 +76,7 @@ function EditForm({ ctx, programmers, onDone }) {
     put('side', form.side || null, task.side)
     put('tags', splitList(form.tags), task.tags ?? [])
     put('areas', splitList(form.areas), task.areas ?? [])
-    if (isLeader) {
+    if (isLead) {
       put('title', form.title.trim(), task.title)
       put('description', form.description.trim() || null, task.description)
       put('priority', form.priority, task.priority)
@@ -94,7 +95,7 @@ function EditForm({ ctx, programmers, onDone }) {
     const a1 = form.assignee_1_id ? Number(form.assignee_1_id) : null
     const a2 = form.assignee_1_id && form.assignee_2_id ? Number(form.assignee_2_id) : null
     const reassign =
-      isLeader && (a1 !== (task.assignee_1_id ?? null) || a2 !== (task.assignee_2_id ?? null))
+      isLead && (a1 !== (task.assignee_1_id ?? null) || a2 !== (task.assignee_2_id ?? null))
 
     if (Object.keys(fields).length === 0 && !reassign) {
       onDone()
@@ -116,7 +117,7 @@ function EditForm({ ctx, programmers, onDone }) {
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      {isLeader && (
+      {isLead && (
         <div>
           <label className="block text-sm font-medium" htmlFor="edit-title">Title</label>
           <input
@@ -147,7 +148,7 @@ function EditForm({ ctx, programmers, onDone }) {
         </p>
       </div>
 
-      {isLeader && (
+      {isLead && (
         <div>
           <label className="block text-sm font-medium" htmlFor="edit-description">Description</label>
           <textarea
@@ -196,7 +197,7 @@ function EditForm({ ctx, programmers, onDone }) {
         </div>
       </div>
 
-      {isLeader && (
+      {isLead && (
         <>
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
@@ -257,7 +258,7 @@ function EditForm({ ctx, programmers, onDone }) {
           <div className="flex flex-wrap gap-5 text-sm">
             <label className="inline-flex items-center gap-2">
               <input type="checkbox" checked={form.restricted} onChange={(e) => update('restricted', e.target.checked)} />
-              Restricted (leaders only)
+              Restricted (leads only)
             </label>
             <label className="inline-flex items-center gap-2">
               <input type="checkbox" checked={form.pool} onChange={(e) => update('pool', e.target.checked)} />
@@ -331,12 +332,12 @@ function DeployEditor({ ctx }) {
 }
 
 function ClaimPanel({ ctx }) {
-  const { task, user, isLeader, busy, run } = ctx
+  const { task, user, isLead, busy, run } = ctx
   const [branch, setBranch] = useState(task.claim_branch ?? '')
   const live = claimIsLive(task)
   const mine = live && task.claimed_by === user.id
-  const claimable = canClaim(task, user) && (!live || mine || isLeader)
-  const canRelease = task.claimed_by && (task.claimed_by === user.id || isLeader)
+  const claimable = canClaim(task, user) && (!live || mine || isLead)
+  const canRelease = task.claimed_by && (task.claimed_by === user.id || isLead)
 
   async function claim(event) {
     event.preventDefault()
@@ -403,9 +404,9 @@ function ClaimPanel({ ctx }) {
 }
 
 export default function OverviewTab({ ctx }) {
-  const { task, people, isLeader, isWorker, isViewer, closed } = ctx
+  const { task, people, isLead, isWorker, isReadOnly, closed } = ctx
   const [editing, setEditing] = useState(false)
-  const programmers = people.filter((p) => p.role === 'programmer' && p.is_active !== false)
+  const programmers = assignablePeople(people)
   const assignees = [task.assignee_1, task.assignee_2].filter(Boolean)
 
   if (editing) {
@@ -467,9 +468,9 @@ export default function OverviewTab({ ctx }) {
           </div>
         </div>
 
-        {(isLeader || isWorker) && !isViewer && !closed && (
+        {(isLead || isWorker) && !isReadOnly && !closed && (
           <button type="button" onClick={() => setEditing(true)} className={secondaryButton}>
-            {isLeader ? 'Edit task' : 'Edit summary, side, tags and areas'}
+            {isLead ? 'Edit task' : 'Edit summary, side, tags and areas'}
           </button>
         )}
       </div>
@@ -503,7 +504,7 @@ export default function OverviewTab({ ctx }) {
             )}
           </div>
           <PlainText className="mt-1.5 text-sm text-ink-secondary">{task.deploy_note}</PlainText>
-          {isWorker && !isViewer && (
+          {isWorker && !isReadOnly && (
             <div className="mt-2">
               <DeployEditor ctx={ctx} />
             </div>

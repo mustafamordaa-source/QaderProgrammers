@@ -6,6 +6,7 @@ import {
   GIT_KIND_LABELS,
   SIDE_LABELS,
   STATUS_LABELS,
+  formatBytes,
 } from '../../../lib/constants'
 import { formatDateTime } from '../../../lib/format'
 
@@ -98,6 +99,26 @@ function describe(event, peopleById) {
         `${DEPLOY_LABELS[data.from] ?? data.from} → ${DEPLOY_LABELS[data.to] ?? data.to}`,
         data.note ? `Note: ${data.note}` : null,
       ].filter(Boolean)
+    case 'triaged':
+      return Object.entries(data).map(([field, value]) =>
+        field === 'assignee_1_id'
+          ? `Assigned to ${peopleById[value]?.name ?? `user ${value}`}`
+          : `${FIELD_LABELS[field] ?? field}: ${fieldValue(field, value)}`,
+      )
+    case 'doc_saved':
+      return [
+        `${data.slug} v${data.version}${data.created ? ' (new)' : ''}`,
+        data.restored_from ? `Restored version ${data.restored_from}` : null,
+        data.note ? `Note: ${data.note}` : null,
+      ].filter(Boolean)
+    case 'file_added':
+      return [data.name ? `${data.name}${data.size ? ` (${formatBytes(data.size)})` : ''}` : null].filter(Boolean)
+    case 'file_removed':
+      return [data.name].filter(Boolean)
+    case 'context_added':
+      return [data.url ?? (data.repo ? `${data.repo}: ${data.path}` : null)].filter(Boolean)
+    case 'context_removed':
+      return [data.title].filter(Boolean)
     default:
       return Object.entries(data).map(([key, value]) => `${key}: ${plain(value)}`)
   }

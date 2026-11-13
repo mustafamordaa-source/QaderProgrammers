@@ -47,7 +47,7 @@ export default function DeactivateModal({ user, isSelf, onClose, onConfirm }) {
         <div className="mt-4 rounded-lg border border-critical/40 bg-critical/5 px-3 py-2.5">
           <p className="text-sm font-medium text-critical">This is your own account.</p>
           <p className="mt-1 text-xs leading-relaxed text-ink-secondary">
-            You will be signed out and will need another leader to let you back in.
+            You will be signed out and will need another admin to let you back in.
           </p>
         </div>
       )}

@@ -12,11 +12,11 @@ const STATE_STYLES = {
 }
 
 function CriterionRow({ ctx, criterion }) {
-  const { task, isWorker, isViewer, busy, run } = ctx
+  const { task, isWorker, isReadOnly, busy, run } = ctx
   // null, 'met' or 'dropped': which inline form is open.
   const [mode, setMode] = useState(null)
   const [evidence, setEvidence] = useState(criterion.evidence ?? '')
-  const canEdit = isWorker && !isViewer
+  const canEdit = isWorker && !isReadOnly
 
   async function submit(event) {
     event.preventDefault()
@@ -126,7 +126,7 @@ function CriterionRow({ ctx, criterion }) {
 }
 
 export default function CriteriaTab({ ctx, criteria }) {
-  const { task, isWorker, isViewer, closed, busy, run } = ctx
+  const { task, isWorker, isReadOnly, closed, busy, run } = ctx
   const [text, setText] = useState('')
   const open = criteria.filter((c) => c.state === 'open').length
   const met = criteria.filter((c) => c.state === 'met').length
@@ -153,7 +153,7 @@ export default function CriteriaTab({ ctx, criteria }) {
         </ol>
       )}
 
-      {isWorker && !isViewer && !closed && (
+      {isWorker && !isReadOnly && !closed && (
         <form onSubmit={add} className="flex flex-wrap items-start gap-2">
           <textarea
             aria-label="New criterion"

@@ -15,7 +15,7 @@ const REASON_STYLES = {
 }
 
 export default function InboxPage() {
-  const { user } = useAuth()
+  const { user, isLead } = useAuth()
   const [items, setItems] = useState([])
   const [people, setPeople] = useState([])
   const [selected, setSelected] = useState(null)
@@ -61,7 +61,7 @@ export default function InboxPage() {
         <h1 className="text-xl font-semibold tracking-tight">Inbox</h1>
         <p className="mt-0.5 text-sm text-ink-secondary">
           What waits on you: questions addressed to you, your parked tasks
-          {user.role === 'leader' ? ', and the review and triage queues.' : '.'}
+          {isLead ? ', and the review and triage queues.' : '.'}
         </p>
       </div>
 

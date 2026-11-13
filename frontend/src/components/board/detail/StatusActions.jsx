@@ -17,8 +17,8 @@ function commentRule(from, to) {
   return null
 }
 
-function buttonLabel(task, target, isLeader) {
-  if (isLeader && task.status === 'in_review') {
+function buttonLabel(task, target, isLead) {
+  if (isLead && task.status === 'in_review') {
     if (target === 'done') return 'Approve & close'
     if (target === 'in_progress') return 'Send back to In progress'
   }
@@ -29,9 +29,9 @@ function buttonLabel(task, target, isLeader) {
   return STATUS_LABELS[target] ?? target
 }
 
-function buttonClass(task, target, isLeader) {
+function buttonClass(task, target, isLead) {
   if (target === 'dropped') return dangerButton
-  if (isLeader && task.status === 'in_review') {
+  if (isLead && task.status === 'in_review') {
     if (target === 'done') {
       return 'rounded-lg bg-good px-3.5 py-1.5 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60'
     }
@@ -48,20 +48,20 @@ const PROMPTS = {
 }
 
 export default function StatusActions({ ctx }) {
-  const { task, user, isLeader, isViewer, isWorker, busy, run } = ctx
+  const { task, user, isLead, isReadOnly, isWorker, busy, run } = ctx
   const [pending, setPending] = useState(null)
   const [comment, setComment] = useState('')
 
-  const targets = allowedTargets(task, user.role, isWorker)
+  const targets = allowedTargets(task, user, isWorker)
   const criteriaOpen = task.criteria_open ?? 0
 
   if (targets.length === 0) {
     let hint = null
-    if (isViewer) hint = 'Viewer accounts are read-only.'
-    else if (task.status === 'in_review' && !isLeader) hint = 'Waiting on a leader to approve or send this back.'
+    if (isReadOnly) hint = 'Viewer accounts are read-only.'
+    else if (task.status === 'in_review' && !isLead) hint = 'Waiting on a lead to approve or send this back.'
     else if (task.status === 'proposed' || task.status === 'backlog') {
-      hint = !isLeader ? 'A leader decides when this enters the plan.' : null
-    } else if (!isWorker && !isLeader && task.status !== 'done' && task.status !== 'dropped') {
+      hint = !isLead ? 'A lead decides when this enters the plan.' : null
+    } else if (!isWorker && !isLead && task.status !== 'done' && task.status !== 'dropped') {
       hint = task.pool
         ? 'Claim this pool task to work on it.'
         : 'Only the people assigned to this task can move it.'
@@ -102,7 +102,7 @@ export default function StatusActions({ ctx }) {
   return (
     <div className="mt-4 rounded-lg border border-hairline p-3">
       <h4 className={sectionTitle}>
-        {isLeader && task.status === 'in_review' ? 'Review decision' : 'Move to'}
+        {isLead && task.status === 'in_review' ? 'Review decision' : 'Move to'}
       </h4>
       <div className="mt-2 flex flex-wrap gap-2">
         {targets.map((target) => {
@@ -114,9 +114,9 @@ export default function StatusActions({ ctx }) {
               disabled={busy || lockedByCriteria}
               title={lockedByCriteria ? 'Mark every criterion met or dropped first' : undefined}
               onClick={() => choose(target)}
-              className={buttonClass(task, target, isLeader)}
+              className={buttonClass(task, target, isLead)}
             >
-              {buttonLabel(task, target, isLeader)}
+              {buttonLabel(task, target, isLead)}
             </button>
           )
         })}
@@ -155,7 +155,7 @@ export default function StatusActions({ ctx }) {
               disabled={busy || (rule === 'required' && !comment.trim())}
               className={pending === 'dropped' || pending === 'in_progress' ? dangerButton : primaryButton}
             >
-              {buttonLabel(task, pending, isLeader).replace('…', '')}
+              {buttonLabel(task, pending, isLead).replace('…', '')}
             </button>
           </div>
         </form>

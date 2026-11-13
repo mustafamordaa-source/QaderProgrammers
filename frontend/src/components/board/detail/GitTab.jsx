@@ -119,7 +119,7 @@ function AddLinkForm({ ctx }) {
 }
 
 export default function GitTab({ ctx, links }) {
-  const { isWorker, isViewer } = ctx
+  const { isWorker, isReadOnly } = ctx
 
   return (
     <div className="space-y-4">
@@ -158,7 +158,7 @@ export default function GitTab({ ctx, links }) {
           })}
         </ul>
       )}
-      {isWorker && !isViewer && <AddLinkForm ctx={ctx} />}
+      {isWorker && !isReadOnly && <AddLinkForm ctx={ctx} />}
     </div>
   )
 }

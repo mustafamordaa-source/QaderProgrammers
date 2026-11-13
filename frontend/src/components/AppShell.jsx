@@ -12,7 +12,7 @@ function navClass({ isActive }) {
 }
 
 export default function AppShell() {
-  const { user, logout, isLeader } = useAuth()
+  const { user, logout, isLead, roles } = useAuth()
 
   return (
     <div className="min-h-screen">
@@ -27,10 +27,13 @@ export default function AppShell() {
             <NavLink to="/inbox" className={navClass}>
               Inbox
             </NavLink>
-            <NavLink to="/metrics" className={navClass}>
-              {isLeader ? 'Team KPIs' : 'My KPIs'}
+            <NavLink to="/documents" className={navClass}>
+              Documents
             </NavLink>
-            {isLeader && (
+            <NavLink to="/metrics" className={navClass}>
+              {isLead ? 'Team KPIs' : 'My KPIs'}
+            </NavLink>
+            {isLead && (
               <NavLink to="/people" className={navClass}>
                 People
               </NavLink>
@@ -45,7 +48,7 @@ export default function AppShell() {
             <div className="hidden text-right sm:block">
               <div dir="auto" className="text-sm font-medium leading-tight">{user?.name}</div>
               <div className="text-xs leading-tight text-ink-muted">
-                {ROLE_LABELS[user?.role] ?? user?.role}
+                {roles.map((role) => ROLE_LABELS[role] ?? role).join(' · ')}
               </div>
             </div>
             <span

@@ -10,6 +10,8 @@ import {
   SIDE_LABELS,
   STATUS_LABELS,
   STATUS_STYLES,
+  isBot,
+  rolesOf,
 } from '../lib/constants'
 
 const pill = 'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium'
@@ -103,14 +105,40 @@ export function CommentKindBadge({ kind }) {
   )
 }
 
+const ROLE_STYLES = {
+  admin: 'border-series3/40 text-series3',
+  lead: 'border-series1/40 text-series1',
+  member: 'border-hairline text-ink-secondary',
+  viewer: 'border-hairline text-ink-muted',
+}
+
+/** One access role (admin, lead, member, viewer). */
 export function RoleBadge({ role }) {
-  const style =
-    role === 'leader'
-      ? 'border-series1/40 text-series1'
-      : role === 'viewer'
-        ? 'border-hairline text-ink-muted'
-        : 'border-hairline text-ink-secondary'
-  return <span className={`${pill} ${style}`}>{ROLE_LABELS[role] ?? role}</span>
+  return (
+    <span className={`${pill} ${ROLE_STYLES[role] ?? ROLE_STYLES.member}`}>
+      {ROLE_LABELS[role] ?? role}
+    </span>
+  )
+}
+
+/** Every access role a person holds, with a Bot marker for service accounts. */
+export function RoleBadges({ user }) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      {isBot(user) && <BotBadge />}
+      {rolesOf(user).map((role) => (
+        <RoleBadge key={role} role={role} />
+      ))}
+    </span>
+  )
+}
+
+export function BotBadge() {
+  return (
+    <span className={`${pill} border-series2/40 bg-series2/5 text-series2`} title="Service account for an automated agent">
+      Bot
+    </span>
+  )
 }
 
 export function TagBadge({ children }) {

@@ -3,6 +3,7 @@ import TaskCard from './TaskCard'
 import {
   BOARD_COLUMNS,
   allowedTargets,
+  hasLeadRights,
   isWorkerOn,
   moveNeedsComment,
   moveNeedsCriteriaMet,
@@ -27,12 +28,20 @@ function dropTarget(column, task, targets) {
  * accepted where the transition is legal for the current user — and the
  * server re-checks it regardless. Leaders also see the Triage column.
  */
-export default function KanbanBoard({ tasks, user, onOpenTask, onMove }) {
+export default function KanbanBoard({
+  tasks,
+  user,
+  onOpenTask,
+  onMove,
+  selectedIds = null,
+  onSelect = null,
+  onSelectMany = null,
+}) {
   const [dragging, setDragging] = useState(null)
   const [hoveredColumn, setHoveredColumn] = useState(null)
-  const isLeader = user.role === 'leader'
+  const isLead = hasLeadRights(user)
 
-  const columns = BOARD_COLUMNS.filter((column) => !column.leaderOnly || isLeader)
+  const columns = BOARD_COLUMNS.filter((column) => !column.leadOnly || isLead)
   const byColumn = Object.fromEntries(
     columns.map((column) => [
       column.key,
@@ -40,7 +49,7 @@ export default function KanbanBoard({ tasks, user, onOpenTask, onMove }) {
     ]),
   )
 
-  const targetsFor = (task) => allowedTargets(task, user.role, isWorkerOn(task, user))
+  const targetsFor = (task) => allowedTargets(task, user, isWorkerOn(task, user))
   const draggingTargets = dragging ? targetsFor(dragging) : []
 
   function handleDragStart(event, task) {
@@ -69,6 +78,9 @@ export default function KanbanBoard({ tasks, user, onOpenTask, onMove }) {
         const isHome = dragging && column.statuses.includes(dragging.status)
         const isBlocked = dragging && !target && !isHome
         const list = byColumn[column.key]
+        // Leads tick Triage cards for the bulk bar.
+        const selectable = column.key === 'triage' && isLead && onSelect
+        const allPicked = selectable && list.length > 0 && list.every((t) => selectedIds?.has(t.id))
 
         return (
           <section
@@ -94,8 +106,16 @@ export default function KanbanBoard({ tasks, user, onOpenTask, onMove }) {
               isBlocked ? 'opacity-40' : '',
             ].join(' ')}
           >
-            <header className="mb-2.5 flex items-baseline justify-between px-1">
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">
+            <header className="mb-2.5 flex items-baseline justify-between gap-2 px-1">
+              <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-ink-secondary">
+                {selectable && list.length > 0 && (
+                  <input
+                    type="checkbox"
+                    checked={allPicked}
+                    onChange={(event) => onSelectMany(list, event.target.checked)}
+                    aria-label="Select every task in Triage"
+                  />
+                )}
                 {column.label}
               </h2>
               <span className="tabular text-xs text-ink-muted">{list.length}</span>
@@ -110,6 +130,8 @@ export default function KanbanBoard({ tasks, user, onOpenTask, onMove }) {
                   onDragStart={handleDragStart}
                   draggable={targetsFor(task).length > 0}
                   showStatus={column.statuses.length > 1}
+                  selected={Boolean(selectable && selectedIds?.has(task.id))}
+                  onSelect={selectable ? onSelect : null}
                 />
               ))}
               {list.length === 0 && (

@@ -53,7 +53,16 @@ function ClaimBadge({ task }) {
   )
 }
 
-export default function TaskCard({ task, onOpen, onDragStart, draggable, showStatus = false }) {
+/** `onSelect` turns on a checkbox for bulk triage (leads, Triage column). */
+export default function TaskCard({
+  task,
+  onOpen,
+  onDragStart,
+  draggable,
+  showStatus = false,
+  selected = false,
+  onSelect = null,
+}) {
   const overdue = isOverdue(task.due_date, task.status)
   const met = (task.criteria_total ?? 0) - (task.criteria_open ?? 0)
 
@@ -61,16 +70,27 @@ export default function TaskCard({ task, onOpen, onDragStart, draggable, showSta
     <article
       draggable={draggable}
       onDragStart={(event) => onDragStart?.(event, task)}
-      className={`rounded-lg border border-hairline bg-surface p-3 text-left shadow-sm transition hover:border-series1/50 ${
-        draggable ? 'cursor-grab active:cursor-grabbing' : ''
-      }`}
+      className={`rounded-lg border bg-surface p-3 text-left shadow-sm transition hover:border-series1/50 ${
+        selected ? 'border-series1' : 'border-hairline'
+      } ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
     >
-      <button type="button" onClick={() => onOpen(task)} className="block w-full text-left">
-        <span className="tabular text-[11px] text-ink-muted">#{task.id}</span>
-        <h3 dir="auto" className="break-words text-sm font-medium leading-snug">
-          {task.title}
-        </h3>
-      </button>
+      <div className="flex items-start gap-2">
+        {onSelect && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(event) => onSelect(task, event.target.checked)}
+            aria-label={`Select task #${task.id} for triage`}
+            className="mt-1 shrink-0"
+          />
+        )}
+        <button type="button" onClick={() => onOpen(task)} className="block min-w-0 flex-1 text-left">
+          <span className="tabular text-[11px] text-ink-muted">#{task.id}</span>
+          <h3 dir="auto" className="break-words text-sm font-medium leading-snug">
+            {task.title}
+          </h3>
+        </button>
+      </div>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         {showStatus && <StatusBadge status={task.status} />}

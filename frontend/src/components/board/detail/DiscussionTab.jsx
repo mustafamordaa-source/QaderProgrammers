@@ -73,13 +73,13 @@ function ReplyForm({ ctx, parent, onDone }) {
 }
 
 function CommentView({ ctx, comment, replies = [], isReply = false }) {
-  const { task, user, isLeader, isViewer, busy, run } = ctx
+  const { task, user, isLead, isReadOnly, busy, run } = ctx
   const [replying, setReplying] = useState(false)
   const openQuestion = comment.kind === 'question' && !comment.resolved_at
   const canResolve =
     openQuestion &&
-    !isViewer &&
-    (isLeader || comment.author?.id === user.id || comment.to_user?.id === user.id)
+    !isReadOnly &&
+    (isLead || comment.author?.id === user.id || comment.to_user?.id === user.id)
 
   return (
     <li className={isReply ? 'border-s-2 border-hairline ps-3' : 'rounded-lg border border-hairline p-3'}>
@@ -99,7 +99,7 @@ function CommentView({ ctx, comment, replies = [], isReply = false }) {
       </div>
       <PlainText className="mt-1.5 text-sm leading-relaxed">{comment.body}</PlainText>
 
-      {!isViewer && !isReply && (
+      {!isReadOnly && !isReply && (
         <div className="mt-2 flex flex-wrap gap-3">
           {!replying && (
             <button type="button" className={linkButton} onClick={() => setReplying(true)}>
@@ -270,7 +270,7 @@ export default function DiscussionTab({ ctx, comments }) {
           ))}
         </ul>
       )}
-      {!ctx.isViewer && <Composer ctx={ctx} />}
+      {!ctx.isReadOnly && <Composer ctx={ctx} />}
     </div>
   )
 }

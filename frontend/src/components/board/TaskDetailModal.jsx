@@ -9,7 +9,7 @@ import {
   SideBadge,
   StatusBadge,
 } from '../Badges'
-import { isClosed, isWorkerOn } from '../../lib/constants'
+import { hasLeadRights, isClosed, isReadOnlyUser, isWorkerOn } from '../../lib/constants'
 import { isOverdue } from '../../lib/format'
 import StatusActions from './detail/StatusActions'
 import OverviewTab from './detail/OverviewTab'
@@ -17,11 +17,17 @@ import CriteriaTab from './detail/CriteriaTab'
 import DiscussionTab from './detail/DiscussionTab'
 import GitTab from './detail/GitTab'
 import HistoryTab from './detail/HistoryTab'
+import DocsTab from './detail/DocsTab'
+import FilesTab from './detail/FilesTab'
+import ContextTab from './detail/ContextTab'
 
 const TABS = [
   { key: 'overview', label: 'Overview' },
   { key: 'criteria', label: 'Criteria' },
   { key: 'discussion', label: 'Discussion' },
+  { key: 'docs', label: 'Docs' },
+  { key: 'files', label: 'Files' },
+  { key: 'context', label: 'Context' },
   { key: 'git', label: 'Git' },
   { key: 'history', label: 'History' },
 ]
@@ -34,19 +40,37 @@ const CONFLICT_MESSAGE =
  * when the server answers 409 for a stale version, so the user always ends
  * up looking at the current state.
  */
-export default function TaskDetailModal({ task, user, people, onClose, onChanged }) {
-  const [tab, setTab] = useState('overview')
+export default function TaskDetailModal({
+  task,
+  user,
+  people,
+  onClose,
+  onChanged,
+  initialTab = 'overview',
+  initialDoc = null,
+}) {
+  const [tab, setTab] = useState(initialTab)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
   const [busy, setBusy] = useState(false)
 
-  const isLeader = user.role === 'leader'
-  const isViewer = user.role === 'viewer'
+  const isLead = hasLeadRights(user)
+  const isReadOnly = isReadOnlyUser(user)
   const isWorker = isWorkerOn(task, user)
   const closed = isClosed(task.status)
 
   async function reload() {
     onChanged(await api.task(task.id))
+  }
+
+  // For tabs that saved something themselves and only want fresh counts and
+  // lists. A failed refresh leaves the old lists until the next open.
+  async function refresh() {
+    try {
+      await reload()
+    } catch {
+      // The write already succeeded; nothing to report.
+    }
   }
 
   /** Run a write. Returns true when it succeeded. */
@@ -84,10 +108,13 @@ export default function TaskDetailModal({ task, user, people, onClose, onChanged
     criteria: task.criteria_total ?? criteria.length,
     discussion: comments.length,
     git: gitLinks.length,
+    docs: task.docs?.length ?? 0,
+    files: task.files?.length ?? 0,
+    context: task.context?.length ?? 0,
     history: task.events?.length ?? 0,
   }
 
-  const ctx = { task, user, people, isLeader, isViewer, isWorker, closed, busy, run }
+  const ctx = { task, user, people, isLead, isReadOnly, isWorker, closed, busy, run, reload: refresh }
 
   return (
     <Modal title={`Task #${task.id}`} onClose={onClose} size="xl">
@@ -154,6 +181,9 @@ export default function TaskDetailModal({ task, user, people, onClose, onChanged
         {tab === 'overview' && <OverviewTab ctx={ctx} />}
         {tab === 'criteria' && <CriteriaTab ctx={ctx} criteria={criteria} />}
         {tab === 'discussion' && <DiscussionTab ctx={ctx} comments={comments} />}
+        {tab === 'docs' && <DocsTab ctx={ctx} initialSlug={initialDoc} />}
+        {tab === 'files' && <FilesTab ctx={ctx} />}
+        {tab === 'context' && <ContextTab ctx={ctx} />}
         {tab === 'git' && <GitTab ctx={ctx} links={gitLinks} />}
         {tab === 'history' && <HistoryTab events={task.events ?? []} people={people} />}
       </div>
