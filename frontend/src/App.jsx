@@ -12,7 +12,7 @@ import DocumentsPage from './pages/DocumentsPage'
 import GuidePage from './pages/GuidePage'
 import { parseTaskRef } from './lib/constants'
 
-/** /tasks/12 or /tasks/HUB-12: open that task's dialog on the board. */
+/** /t/12 or /t/HUB-12 (short link; /tasks is an API prefix): open that task's dialog on the board. */
 function TaskLinkRedirect() {
   const { ref } = useParams()
   const id = parseTaskRef(ref)
@@ -32,7 +32,7 @@ export default function App() {
           }
         >
           <Route path="/board" element={<BoardPage />} />
-          <Route path="/tasks/:ref" element={<TaskLinkRedirect />} />
+          <Route path="/t/:ref" element={<TaskLinkRedirect />} />
           <Route path="/inbox" element={<InboxPage />} />
           <Route path="/documents" element={<DocumentsPage />} />
           <Route path="/metrics" element={<KpiPage />} />
