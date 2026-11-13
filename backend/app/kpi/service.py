@@ -321,9 +321,10 @@ def build_team_report(db: Session, *, range_start: datetime, range_end: datetime
     counts once for the team even though it counts in full for both assignees.
     """
     team = build_report(db, user=None, range_start=range_start, range_end=range_end)
-    programmers = db.scalars(
-        select(User).where(User.role == Role.programmer).order_by(User.name)
-    ).all()
+    programmers = [
+        u for u in db.scalars(select(User).order_by(User.name)).all()
+        if u.is_member and not u.is_bot
+    ]
     return TeamKpiReport(
         **team.model_dump(),
         programmers=[

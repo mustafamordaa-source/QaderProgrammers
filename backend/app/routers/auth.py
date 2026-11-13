@@ -54,6 +54,7 @@ def login(payload: LoginRequest, request: Request, db: DbSession) -> TokenRespon
     if (
         user is None
         or not user.is_active
+        or user.is_bot  # bots use tokens an admin issues, never a password
         or not verify_password(payload.password, user.password_hash)
     ):
         raise HTTPException(
@@ -93,7 +94,12 @@ def whoami(auth: AuthCtx) -> dict:
 
 
 @router.get("/users", response_model=list[UserOut])
-def list_users(user: CurrentUser, db: DbSession, role: Role | None = None) -> list[User]:
+def list_users(
+    user: CurrentUser,
+    db: DbSession,
+    role: str | None = None,
+    side: str | None = None,
+) -> list[User]:
     """Directory used by the assignment UI and by agents resolving handles.
 
     Members get the list too (names are shown on shared tasks), but it is
@@ -102,9 +108,19 @@ def list_users(user: CurrentUser, db: DbSession, role: Role | None = None) -> li
     # Deactivated people are left out: this feeds the assignment pickers, and
     # nobody should be given new work. Leaders see everyone via GET /users.
     stmt = select(User).where(User.is_active.is_(True)).order_by(User.name)
+    people = list(db.scalars(stmt))
     if role is not None:
-        stmt = stmt.where(User.role == role)
-    return list(db.scalars(stmt))
+        # Accepts the access roles (admin, lead, member, viewer) and the old
+        # single-role names (leader, programmer) older clients send.
+        wanted = {"leader": "lead", "programmer": "member"}.get(role, role)
+        people = [
+            p for p in people
+            if (wanted in p.effective_roles or (wanted == "lead" and p.is_lead))
+            and not (p.is_bot and wanted == "member")
+        ]
+    if side is not None:
+        people = [p for p in people if side in (p.sides or [])]
+    return people
 
 
 # --- personal API tokens -------------------------------------------------------
@@ -134,7 +150,7 @@ def create_token(
     """Create a token for your agents. Only a browser login can do this, so a
     leaked token cannot mint more tokens."""
     user = auth.user
-    if user.role is Role.viewer:
+    if user.is_read_only:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Viewer accounts cannot create API tokens")
     if payload.expires_days > settings.api_token_max_days:
         raise HTTPException(
@@ -180,7 +196,7 @@ def create_token(
 def revoke_token(token_id: int, db: DbSession, auth: Auth = Depends(require_human)) -> ApiToken:
     """Revoke your own token. A leader may revoke anyone's."""
     row = db.get(ApiToken, token_id)
-    if row is None or (row.user_id != auth.user.id and auth.user.role is not Role.leader):
+    if row is None or (row.user_id != auth.user.id and not auth.user.is_admin):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Token not found")
     if row.revoked_at is None:
         row.revoked_at = utcnow()

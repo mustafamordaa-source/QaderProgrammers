@@ -16,6 +16,9 @@ from app.models import (
     DeployState,
     EventType,
     GitLinkKind,
+    AccessRole,
+    AccountType,
+    DocKind,
     Priority,
     Role,
     Side,
@@ -77,7 +80,10 @@ class UserOut(ORMModel):
     id: int
     name: str
     email: EmailStr
+    # Older single-role view, kept in step with `roles`.
     role: Role
+    roles: list[AccessRole] = Field(default_factory=list, validation_alias="effective_roles")
+    account_type: AccountType = AccountType.person
     is_active: bool
     created_at: datetime
     handle: str | None = None
@@ -118,8 +124,12 @@ class _ProfileFields(BaseModel):
 class UserCreate(_ProfileFields):
     name: str = Field(min_length=1, max_length=120)
     email: EmailStr
-    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=128)
-    role: Role = Role.programmer
+    # Required for a person; a bot gets a random one it never uses.
+    password: str | None = Field(default=None, min_length=MIN_PASSWORD_LENGTH, max_length=128)
+    roles: list[AccessRole] | None = None
+    # Older clients send one role; `roles` wins when both are present.
+    role: Role | None = None
+    account_type: AccountType = AccountType.person
 
     @field_validator("name")
     @classmethod
@@ -133,6 +143,7 @@ class UserCreate(_ProfileFields):
 class UserUpdate(_ProfileFields):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     email: EmailStr | None = None
+    roles: list[AccessRole] | None = None
     role: Role | None = None
     is_active: bool | None = None
 
@@ -286,6 +297,9 @@ class TaskDetailOut(TaskOut):
     comments: list[CommentOut] = []
     criteria: list[CriterionOut] = []
     git_links: list[GitLinkOut] = []
+    docs: list["DocMeta"] = []
+    files: list["FileOut"] = []
+    context: list["ContextOut"] = []
 
 
 class ClaimOut(TaskOut):
@@ -475,7 +489,153 @@ class TaskBrief(BaseModel):
     last_handback: str | None
     git: list[str]
     deploy: str
+    docs: list[str] = []
+    context: list[str] = []
+    files: list[str] = []
     truncated: bool
+
+
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
+MAX_DOC_CHARS = 200_000
+
+
+class DocVersionMeta(ORMModel):
+    n: int
+    title: str
+    note: str | None
+    author: UserBrief
+    actor_kind: ActorKind
+    agent_name: str | None
+    created_at: datetime
+    size: int = 0
+
+
+class DocMeta(ORMModel):
+    id: int
+    slug: str
+    title: str
+    kind: DocKind
+    current_version: int
+    created_at: datetime
+    updated_at: datetime
+    last_author: str | None = None
+    last_actor_kind: ActorKind | None = None
+
+
+class DocOut(DocMeta):
+    version: int
+    body: str
+    note: str | None = None
+    version_author: UserBrief | None = None
+    version_actor_kind: ActorKind | None = None
+    version_agent_name: str | None = None
+    version_created_at: datetime | None = None
+
+
+class DocCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    slug: str | None = Field(default=None, max_length=60)
+    kind: DocKind = DocKind.notes
+    body: str = Field(default="", max_length=MAX_DOC_CHARS)
+    note: str | None = Field(default=None, max_length=300)
+
+    @field_validator("slug")
+    @classmethod
+    def _slug(cls, v):
+        if v is not None and not SLUG_RE.match(v):
+            raise ValueError("slug: lowercase letters, digits and '-', up to 60")
+        return v
+
+
+class DocSave(BaseModel):
+    body: str = Field(max_length=MAX_DOC_CHARS)
+    # The version you edited. A newer save in between gets 409.
+    base_version: int = Field(ge=1)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    kind: DocKind | None = None
+    note: str | None = Field(default=None, max_length=300)
+
+
+class FileOut(ORMModel):
+    id: int
+    name: str
+    mime: str
+    size: int
+    sha256: str
+    note: str | None
+    uploaded_by: int
+    uploader: UserBrief | None = None
+    actor_kind: ActorKind
+    agent_name: str | None
+    created_at: datetime
+
+
+class ContextOut(ORMModel):
+    id: int
+    kind: str
+    repo: str | None
+    path: str | None
+    ref: str | None
+    commit: str | None
+    url: str | None
+    title: str
+    summary: str | None
+    added_by: int
+    adder: UserBrief | None = None
+    actor_kind: ActorKind
+    agent_name: str | None = None
+    created_at: datetime
+
+
+class ContextCreate(BaseModel):
+    kind: str = Field(pattern=r"^(repo_path|url)$")
+    repo: str | None = Field(default=None, max_length=200, pattern=r"^[\w.-]+/[\w.-]+$")
+    path: str | None = Field(default=None, max_length=400)
+    ref: str | None = Field(default=None, max_length=200)
+    commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,40}$")
+    url: str | None = Field(default=None, max_length=500)
+    title: str = Field(min_length=1, max_length=200)
+    summary: str | None = Field(default=None, max_length=2_000)
+
+
+class DocsIndexItem(BaseModel):
+    """One thing an agent can read: a hub document or a linked repo file/page."""
+
+    kind: str  # hub_doc | repo_path | url
+    title: str
+    summary: str | None = None
+    task_id: int
+    task_title: str
+    repo: str | None = None
+    path: str | None = None
+    ref: str | None = None
+    url: str | None = None
+    slug: str | None = None
+    version: int | None = None
+    updated_at: datetime
+
+
+class TriageRequest(BaseModel):
+    task_ids: list[int] = Field(min_length=1, max_length=100)
+    to: TaskStatus
+    reason: str | None = Field(default=None, max_length=2_000)
+    assignee_1_id: int | None = None
+    priority: Priority | None = None
+    side: Side | None = None
+
+    @field_validator("to")
+    @classmethod
+    def _to(cls, v: TaskStatus) -> TaskStatus:
+        if v not in {TaskStatus.backlog, TaskStatus.to_do, TaskStatus.dropped}:
+            raise ValueError("triage moves tasks to backlog, to_do or dropped")
+        return v
+
+
+class TriageResult(BaseModel):
+    id: int
+    ok: bool
+    status: TaskStatus | None = None
+    error: str | None = None
 
 
 class InboxItem(BaseModel):
@@ -547,3 +707,6 @@ class TeamKpiReport(KpiReport):
 
 
 TokenResponse.model_rebuild()
+
+TaskDetailOut.model_rebuild()
+ClaimOut.model_rebuild()

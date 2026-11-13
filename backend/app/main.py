@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import check_production_settings, settings
-from app.routers import auth, kpi, tasks, users
+from app.routers import auth, docs, kpi, tasks, users
 
 # Refuse to start in production with a public or short signing key.
 check_production_settings(settings)
@@ -36,6 +36,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(tasks.router)
+app.include_router(docs.router)
 app.include_router(users.router)
 app.include_router(kpi.router)
 

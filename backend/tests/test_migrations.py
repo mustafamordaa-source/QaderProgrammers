@@ -48,9 +48,9 @@ def old_db(tmp_path):
 
 
 def test_old_database_is_stamped_then_upgraded(old_db):
-    assert migrate.upgrade(old_db) == "0002"
+    assert migrate.upgrade(old_db) == "0003"
     # Running it again is a no-op.
-    assert migrate.upgrade(old_db) == "0002"
+    assert migrate.upgrade(old_db) == "0003"
 
 
 def test_live_tasks_move_to_in_progress_with_a_side(old_db):
@@ -93,4 +93,17 @@ def test_migrated_schema_matches_the_models(old_db, tmp_path):
 
 def test_fresh_database_builds_from_scratch(tmp_path):
     url = f"sqlite:///{(tmp_path / 'fresh.db').as_posix()}"
-    assert migrate.upgrade(url) == "0002"
+    assert migrate.upgrade(url) == "0003"
+
+
+def test_old_leaders_become_admin_and_lead(old_db):
+    from app.models import User
+
+    migrate.upgrade(old_db)
+    engine = create_engine(old_db)
+    with Session(engine) as db:
+        users = {u.email: u for u in db.scalars(select(User))}
+        assert users["lead@example.com"].roles == ["admin", "lead"]
+        assert users["alice@example.com"].roles == ["member"]
+        assert users["lead@example.com"].is_admin and not users["lead@example.com"].is_member
+    engine.dispose()

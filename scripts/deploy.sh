@@ -75,6 +75,9 @@ if os.path.exists(src):
     for old in sorted(glob.glob('$backup_dir/taskflow-*.db'))[:-14]:
         os.remove(old)
 "
+  # Attachments are stored by content hash and never rewritten, so one
+  # rolling copy is enough.
+  docker exec taskflow_api sh -c "[ -d /data/files ] && mkdir -p $backup_dir/files && cp -rn /data/files/. $backup_dir/files/ || true"
 else
   echo "taskflow_api is not running; skipping the backup."
 fi

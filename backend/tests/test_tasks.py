@@ -105,12 +105,14 @@ class TestVisibility:
         queue = client.get("/tasks?mine=true", headers=auth(alice)).json()
         assert [t["id"] for t in queue] == [mine.id]
 
-    def test_restricted_tasks_are_404_for_members(self, client, auth, alice, db_session, make_task):
+    def test_restricted_tasks_are_404_for_members(self, client, auth, alice, bob, db_session, make_task):
         task = make_task(title="Hidden", assignee_1=alice)
         task.restricted = True
         db_session.commit()
-        assert client.get(f"/tasks/{task.id}", headers=auth(alice)).status_code == 404
-        assert client.get("/tasks", headers=auth(alice)).json() == []
+        assert client.get(f"/tasks/{task.id}", headers=auth(bob)).status_code == 404
+        assert client.get("/tasks", headers=auth(bob)).json() == []
+        # The person on it still sees it.
+        assert client.get(f"/tasks/{task.id}", headers=auth(alice)).status_code == 200
 
     def test_other_peoples_proposals_are_hidden(self, client, auth, alice, bob):
         created = client.post(

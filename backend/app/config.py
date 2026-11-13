@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     # must never be named in the hub). Set on the server, never in this repo.
     lint_blocked_paths: str = ""
 
+    # Attachments live on disk under this folder, named by content hash.
+    files_dir: str = "./files"
+    file_max_mb: int = 10
+    # Total for all live attachments; protects a small server disk.
+    files_total_mb: int = 200
+    # Hosts a context link may point at (a host matches itself and its subdomains).
+    context_url_hosts: str = "github.com,qader.com,qader.vip"
+
 
 def check_production_settings(s: "Settings") -> None:
     """Refuse to run in production with a public or short signing key."""

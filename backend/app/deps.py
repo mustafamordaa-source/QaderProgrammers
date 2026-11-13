@@ -40,8 +40,12 @@ SCOPES: dict[str, str] = {
     "comments:write": "Comment, ask and answer",
     "claims": "Claim and release tasks",
     "git:write": "Link branches, PRs and commits",
+    "docs:write": "Write task documents, attach files, add context links",
+    "tasks:propose": "Propose tasks for a lead to triage (bots)",
 }
-DEFAULT_TOKEN_SCOPES: tuple[str, ...] = tuple(SCOPES)
+DEFAULT_TOKEN_SCOPES: tuple[str, ...] = tuple(s for s in SCOPES if s != "tasks:propose")
+# The most a bot token may hold: read, propose, comment on its own proposals.
+BOT_SCOPES: tuple[str, ...] = ("tasks:read", "tasks:propose", "comments:write")
 
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _BAD_AGENT_NAMES = {"", "unknown", "agent", "none", "null"}
@@ -115,6 +119,11 @@ def get_auth(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Writes with an API token need an X-Agent header naming the agent (not 'unknown').",
+            )
+        if not write and "tasks:read" not in (token.scopes or []):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This API token lacks the 'tasks:read' scope",
             )
         token.last_used_at = utcnow()
         auth = Auth(
@@ -196,7 +205,22 @@ def require_roles(*roles: Role):
     return guard
 
 
-require_leader = require_roles(Role.leader)
+def _require(check: str, label: str):
+    def guard(user: CurrentUser) -> User:
+        if not getattr(user, check):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"This action requires role: {label}",
+            )
+        return user
+
+    return guard
+
+
+# Leads run the work; admins hold every lead right too. The message keeps the
+# word "leader" that older clients and tests match on.
+require_leader = _require("is_lead", "leader")
+require_admin = _require("is_admin", "admin")
 require_programmer = require_roles(Role.programmer)
 
 LeaderUser = Annotated[User, Depends(require_leader)]

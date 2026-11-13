@@ -40,6 +40,55 @@ class Role(str, enum.Enum):
     viewer = "viewer"
 
 
+class AccessRole(str, enum.Enum):
+    """What a person may do. A person holds one or more; rights add up.
+
+    - admin: people, bot accounts, everyone's tokens, settings; also every
+      lead right
+    - lead: runs the work: triage, assign, approve, reject, drop, restricted
+    - member: does the work: can be assigned, claims, moves own tasks
+    - viewer: reads; ignored when combined with any other role
+    """
+
+    admin = "admin"
+    lead = "lead"
+    member = "member"
+    viewer = "viewer"
+
+
+ACCESS_ORDER: tuple[AccessRole, ...] = (
+    AccessRole.admin,
+    AccessRole.lead,
+    AccessRole.member,
+    AccessRole.viewer,
+)
+
+
+def normalise_roles(values) -> list[str]:
+    """Deduplicate, order, and drop viewer when anything stronger is present."""
+    wanted = {AccessRole(v).value if not isinstance(v, AccessRole) else v.value for v in values or []}
+    if wanted - {AccessRole.viewer.value}:
+        wanted.discard(AccessRole.viewer.value)
+    return [r.value for r in ACCESS_ORDER if r.value in wanted]
+
+
+def legacy_role_for(roles: list[str]) -> "Role":
+    """The single role stored in the old `role` column, for older clients."""
+    if AccessRole.admin.value in roles or AccessRole.lead.value in roles:
+        return Role.leader
+    if AccessRole.member.value in roles:
+        return Role.programmer
+    return Role.viewer
+
+
+class AccountType(str, enum.Enum):
+    person = "person"
+    # A service account for an automated agent (for example a server-side
+    # scanner). No password login; an admin issues its tokens; it can only
+    # propose tasks.
+    bot = "bot"
+
+
 class Side(str, enum.Enum):
     """Which part of the work a task (or a person) covers."""
 
@@ -49,6 +98,7 @@ class Side(str, enum.Enum):
     content = "content"
     infra = "infra"
     qa = "qa"
+    design = "design"
     other = "other"
 
 
@@ -152,6 +202,12 @@ class EventType(str, enum.Enum):
     git_linked = "git_linked"
     deployed = "deployed"
     dropped = "dropped"
+    triaged = "triaged"
+    doc_saved = "doc_saved"
+    file_added = "file_added"
+    file_removed = "file_removed"
+    context_added = "context_added"
+    context_removed = "context_removed"
 
 
 # Store enums as their string values rather than the Python member names, so the
@@ -181,9 +237,63 @@ class User(Base):
     sides: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     # In-progress tasks before a claim warns. Warn-only for now.
     wip_limit: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    # Access roles (see AccessRole). `role` above is kept in step for older
+    # clients; new code reads these properties.
+    roles: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    account_type: Mapped[AccountType] = mapped_column(
+        _str_enum(AccountType, "account_type"), default=AccountType.person, nullable=False
+    )
+
+    @property
+    def effective_roles(self) -> list[str]:
+        if self.roles:
+            return normalise_roles(self.roles)
+        # Rows written before roles existed.
+        return {
+            Role.leader: [AccessRole.admin.value, AccessRole.lead.value],
+            Role.programmer: [AccessRole.member.value],
+            Role.viewer: [AccessRole.viewer.value],
+        }[self.role]
+
+    def set_roles(self, values) -> None:
+        roles = normalise_roles(values)
+        if not roles:
+            raise ValueError("a person needs at least one role")
+        self.roles = roles
+        self.role = legacy_role_for(roles)
+
+    @property
+    def is_admin(self) -> bool:
+        return AccessRole.admin.value in self.effective_roles
+
+    @property
+    def is_lead(self) -> bool:
+        roles = self.effective_roles
+        return AccessRole.lead.value in roles or AccessRole.admin.value in roles
+
+    @property
+    def is_member(self) -> bool:
+        return AccessRole.member.value in self.effective_roles
+
+    @property
+    def is_read_only(self) -> bool:
+        return not (self.is_lead or self.is_member)
+
+    @property
+    def is_bot(self) -> bool:
+        return self.account_type is AccountType.bot
+
+    @property
+    def work_role(self) -> Role:
+        """The workflow rule set that applies (see transitions.py)."""
+        if self.is_lead:
+            return Role.leader
+        if self.is_member:
+            return Role.programmer
+        return Role.viewer
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"<User {self.id} {self.email} {self.role.value}>"
+        return f"<User {self.id} {self.email} {self.effective_roles}>"
 
 
 class Task(Base):
@@ -260,6 +370,15 @@ class Task(Base):
     )
     git_links: Mapped[list[GitLink]] = relationship(
         back_populates="task", order_by="GitLink.id", cascade="all, delete-orphan"
+    )
+    docs: Mapped[list[TaskDoc]] = relationship(
+        back_populates="task", order_by="TaskDoc.id", cascade="all, delete-orphan"
+    )
+    files: Mapped[list[TaskFile]] = relationship(
+        back_populates="task", order_by="TaskFile.id", cascade="all, delete-orphan"
+    )
+    context: Mapped[list[ContextLink]] = relationship(
+        back_populates="task", order_by="ContextLink.id", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
@@ -431,3 +550,128 @@ class GitLink(Base):
     __table_args__ = (
         UniqueConstraint("task_id", "repo", "kind", "ref", name="uq_git_links_ref"),
     )
+
+
+class DocKind(str, enum.Enum):
+    spec = "spec"
+    plan = "plan"
+    notes = "notes"
+    test_plan = "test_plan"
+    decision = "decision"
+    handover = "handover"
+    other = "other"
+
+
+class TaskDoc(Base):
+    """A Markdown document on a task (spec, plan, notes...). Every save is a
+    new full version, so history, diffs and restores stay simple."""
+
+    __tablename__ = "task_docs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
+    slug: Mapped[str] = mapped_column(String(60), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    kind: Mapped[DocKind] = mapped_column(_str_enum(DocKind, "doc_kind"), default=DocKind.notes, nullable=False)
+    current_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+    task: Mapped[Task] = relationship(back_populates="docs")
+    versions: Mapped[list[TaskDocVersion]] = relationship(
+        back_populates="doc", order_by="TaskDocVersion.n", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (UniqueConstraint("task_id", "slug", name="uq_task_docs_slug"),)
+
+
+class TaskDocVersion(Base):
+    __tablename__ = "task_doc_versions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    doc_id: Mapped[int] = mapped_column(ForeignKey("task_docs.id"), nullable=False, index=True)
+    n: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    actor_kind: Mapped[ActorKind] = mapped_column(
+        _str_enum(ActorKind, "doc_actor_kind"), default=ActorKind.human, nullable=False
+    )
+    agent_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+    doc: Mapped[TaskDoc] = relationship(back_populates="versions")
+    author: Mapped[User] = relationship(lazy="joined")
+
+    __table_args__ = (UniqueConstraint("doc_id", "n", name="uq_task_doc_versions_n"),)
+
+
+class TaskFile(Base):
+    """An uploaded attachment (screenshot, PDF, log). Stored on disk by hash."""
+
+    __tablename__ = "task_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    mime: Mapped[str] = mapped_column(String(100), nullable=False)
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    actor_kind: Mapped[ActorKind] = mapped_column(
+        _str_enum(ActorKind, "file_actor_kind"), default=ActorKind.human, nullable=False
+    )
+    agent_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+    task: Mapped[Task] = relationship(back_populates="files")
+    uploader: Mapped[User] = relationship(lazy="joined")
+
+
+class ContextKind(str, enum.Enum):
+    # A file in a git repo: plan, doc, contract section.
+    repo_path = "repo_path"
+    # A web page on an allowed host.
+    url = "url"
+
+
+class ContextLink(Base):
+    """Where to read more: a repo document or a page, with a short summary,
+    so an agent knows what exists before it opens anything."""
+
+    __tablename__ = "task_context"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
+    kind: Mapped[ContextKind] = mapped_column(_str_enum(ContextKind, "context_kind"), nullable=False)
+    repo: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    path: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    # Branch or tag the path lives on, and the commit it was read at.
+    ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    commit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    added_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    actor_kind: Mapped[ActorKind] = mapped_column(
+        _str_enum(ActorKind, "context_actor_kind"), default=ActorKind.human, nullable=False
+    )
+    agent_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+    task: Mapped[Task] = relationship(back_populates="context")
+    adder: Mapped[User] = relationship(lazy="joined")
+
+
+event.listen(
+    TaskDocVersion.__table__,
+    "after_create",
+    DDL(
+        "CREATE TRIGGER IF NOT EXISTS task_doc_versions_no_update BEFORE UPDATE ON task_doc_versions "
+        "BEGIN SELECT RAISE(ABORT, 'task_doc_versions is append-only'); END"
+    ).execute_if(dialect="sqlite"),
+)

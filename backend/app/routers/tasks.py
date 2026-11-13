@@ -29,6 +29,7 @@ from app.deps import Auth, AuthCtx, DbSession, require_leader, require_scope
 from app.events import record
 from app.models import (
     CLOSED_STATUSES,
+    AccountType,
     ActorKind,
     Comment,
     CommentKind,
@@ -39,6 +40,7 @@ from app.models import (
     GitLink,
     Role,
     Task,
+    TaskDoc,
     TaskEvent,
     TaskStatus,
     User,
@@ -47,6 +49,10 @@ from app.models import (
 from app.schemas import (
     ClaimOut,
     ClaimRequest,
+    ContextOut,
+    FileOut,
+    TriageRequest,
+    TriageResult,
     CommentCreate,
     CommentOut,
     CriterionCreate,
@@ -93,6 +99,9 @@ def _get_task_or_404(db: Session, task_id: int) -> Task:
             selectinload(Task.comments),
             selectinload(Task.criteria),
             selectinload(Task.git_links),
+            selectinload(Task.docs).selectinload(TaskDoc.versions),
+            selectinload(Task.files),
+            selectinload(Task.context),
         )
     )
     if task is None:
@@ -101,10 +110,11 @@ def _get_task_or_404(db: Session, task_id: int) -> Task:
 
 
 def _can_see(task: Task, user: User) -> bool:
-    if user.role is Role.leader:
+    if user.is_lead:
         return True
     if task.restricted:
-        return False
+        # Restricted work stays between the leads and the people on it.
+        return user.id in task.assignee_ids
     if task.status is S.proposed:
         return task.created_by == user.id
     return True
@@ -117,19 +127,20 @@ def _assert_visible(task: Task, user: User) -> None:
 
 def _visible_filter(user: User):
     """SQL filter matching `_can_see` for list queries."""
-    if user.role is Role.leader:
+    if user.is_lead:
         return None
+    assigned = or_(Task.assignee_1_id == user.id, Task.assignee_2_id == user.id)
     return and_(
-        Task.restricted.is_(False),
+        or_(Task.restricted.is_(False), assigned),
         or_(Task.status != S.proposed, Task.created_by == user.id),
     )
 
 
 def _is_worker(task: Task, user: User) -> bool:
     """May this person work on the task (not just read it)?"""
-    if user.role is Role.leader:
+    if user.is_lead:
         return True
-    if user.role is Role.viewer:
+    if user.is_read_only:
         return False
     if user.id in task.assignee_ids:
         return True
@@ -145,7 +156,7 @@ def _assert_worker(task: Task, user: User) -> None:
 
 
 def _assert_not_viewer(user: User) -> None:
-    if user.role is Role.viewer:
+    if user.is_read_only:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Viewer accounts are read-only")
 
 
@@ -189,7 +200,13 @@ def _out(task: Task, model=TaskOut, **extra):
 
 
 def _detail(task: Task) -> TaskDetailOut:
-    return _out(task, TaskDetailOut)
+    from app.routers.docs import doc_meta
+
+    row = _out(task, TaskDetailOut)
+    row.docs = [doc_meta(d) for d in task.docs]
+    row.files = [FileOut.model_validate(f) for f in task.files if f.removed_at is None]
+    row.context = [ContextOut.model_validate(c) for c in task.context]
+    return row
 
 
 def _validate_assignees(db: Session, assignee_1_id: int | None, assignee_2_id: int | None) -> None:
@@ -202,7 +219,7 @@ def _validate_assignees(db: Session, assignee_1_id: int | None, assignee_2_id: i
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"{field}: user {uid} does not exist",
             )
-        if assignee.role is not Role.programmer:
+        if assignee.is_bot or not assignee.is_member:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"{field}: tasks can only be assigned to members",
@@ -267,15 +284,26 @@ def _unpark_if_clear(db: Session, auth: Auth, task: Task) -> None:
 # --- create / list / read -----------------------------------------------------
 
 
+def _create_auth(auth: AuthCtx) -> Auth:
+    if not (auth.has("tasks:create") or auth.has("tasks:propose")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This API token lacks the 'tasks:create' or 'tasks:propose' scope",
+        )
+    return auth
+
+
 @router.post("", response_model=TaskDetailOut, status_code=status.HTTP_201_CREATED)
 def create_task(
     payload: TaskCreate,
     db: DbSession,
-    auth: Auth = Depends(require_scope("tasks:create")),
+    auth: Auth = Depends(_create_auth),
 ) -> TaskDetailOut:
     user = auth.user
     _assert_not_viewer(user)
-    is_leader = user.role is Role.leader
+    # Bots and propose-only tokens file proposals for a lead to triage.
+    propose_only = user.is_bot or not auth.has("tasks:create")
+    is_leader = user.is_lead and not propose_only
 
     if not is_leader:
         if payload.assignee_1_id or payload.assignee_2_id:
@@ -290,9 +318,12 @@ def create_task(
             )
     _validate_assignees(db, payload.assignee_1_id, payload.assignee_2_id)
 
-    start = payload.status if is_leader else (
-        S.proposed if payload.status is S.proposed else S.backlog
-    )
+    if propose_only:
+        start = S.proposed
+    elif is_leader:
+        start = payload.status
+    else:
+        start = S.proposed if payload.status is S.proposed else S.backlog
     task = Task(
         title=lint.clean(payload.title, field="title"),
         description=lint.clean(payload.description, field="description"),
@@ -342,6 +373,9 @@ def list_tasks(
     ready: bool = Query(default=False, description="Only tasks you can claim now"),
     q: str | None = Query(default=None, max_length=100),
     include_closed: bool = True,
+    created_kind: ActorKind | None = None,
+    created_by: int | None = None,
+    from_bots: bool = Query(default=False, description="Only tasks a bot account filed"),
     limit: int = Query(default=500, ge=1, le=1000),
 ) -> list[TaskOut]:
     if not auth.has("tasks:read"):
@@ -368,7 +402,7 @@ def list_tasks(
             Task.status == S.to_do,
             or_(Task.claimed_by.is_(None), Task.claim_expires_at <= now),
         )
-        if user.role is not Role.leader:
+        if not user.is_lead:
             stmt = stmt.where(or_(mine_filter, Task.pool.is_(True)))
 
     if status_filter is not None:
@@ -377,6 +411,13 @@ def list_tasks(
         stmt = stmt.where(Task.status.not_in(list(CLOSED_STATUSES)))
     if side:
         stmt = stmt.where(Task.side == side)
+    if created_kind is not None:
+        stmt = stmt.where(Task.created_kind == created_kind)
+    if created_by is not None:
+        stmt = stmt.where(Task.created_by == created_by)
+    if from_bots:
+        bot_ids = select(User.id).where(User.account_type == AccountType.bot)
+        stmt = stmt.where(Task.created_by.in_(bot_ids))
     if q:
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(Task.title.ilike(like), Task.description.ilike(like), Task.summary.ilike(like)))
@@ -422,7 +463,7 @@ def inbox(auth: AuthCtx, db: DbSession) -> list[InboxItem]:
     for t in db.scalars(select(Task).where(mine, Task.status.in_([S.blocked, S.needs_confirm]))).unique():
         items.append(InboxItem(task_id=t.id, task_title=t.title, reason=t.status.value, at=t.updated_at))
 
-    if user.role is Role.leader:
+    if user.is_lead:
         for t in db.scalars(
             select(Task).where(Task.status.in_([S.in_review, S.proposed])).order_by(Task.updated_at)
         ).unique():
@@ -431,11 +472,73 @@ def inbox(auth: AuthCtx, db: DbSession) -> list[InboxItem]:
     return items
 
 
+@router.post("/triage", response_model=list[TriageResult])
+def triage(
+    payload: TriageRequest,
+    db: DbSession,
+    auth: Auth = Depends(require_scope("tasks:write")),
+    lead: User = Depends(require_leader),
+) -> list[TriageResult]:
+    """Accept or drop many proposals (or backlog tasks) at once.
+
+    Each task is checked on its own; one bad id does not stop the rest.
+    """
+    if payload.to is S.dropped and not (payload.reason or "").strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A reason is required to drop tasks")
+    reason = lint.clean(payload.reason, field="reason")
+    if payload.assignee_1_id is not None:
+        _validate_assignees(db, payload.assignee_1_id, None)
+    results: list[TriageResult] = []
+    for task_id in dict.fromkeys(payload.task_ids):
+        task = db.get(Task, task_id)
+        if task is None:
+            results.append(TriageResult(id=task_id, ok=False, error="not found"))
+            continue
+        if task.status not in {S.proposed, S.backlog}:
+            results.append(TriageResult(id=task_id, ok=False, status=task.status,
+                                        error=f"only proposed or backlog tasks (task is {task.status.value})"))
+            continue
+        if task.status is payload.to:
+            results.append(TriageResult(id=task_id, ok=True, status=task.status))
+            continue
+        from_status = task.status
+        task.status = payload.to
+        changes = {}
+        if payload.assignee_1_id is not None and payload.to is not S.dropped:
+            task.assignee_1_id = payload.assignee_1_id
+            changes["assignee_1_id"] = payload.assignee_1_id
+        if payload.priority is not None:
+            task.priority = payload.priority
+            changes["priority"] = payload.priority.value
+        if payload.side is not None:
+            task.side = payload.side
+            changes["side"] = payload.side.value
+        if payload.to is S.dropped:
+            task.drop_reason = reason
+        _touch(task)
+        record(
+            db, auth, task_id=task.id,
+            event_type=EventType.dropped if payload.to is S.dropped else EventType.triaged,
+            from_status=from_status, to_status=payload.to, comment=reason, data=changes or None,
+        )
+        results.append(TriageResult(id=task_id, ok=True, status=payload.to))
+    db.commit()
+    return results
+
+
 @router.get("/{task_id}", response_model=TaskDetailOut)
 def get_task(task_id: int, auth: AuthCtx, db: DbSession) -> TaskDetailOut:
     task = _get_task_or_404(db, task_id)
     _assert_visible(task, auth.user)
     return _detail(task)
+
+
+def _size(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.0f} KB"
+    return f"{n / 1024 / 1024:.1f} MB"
 
 
 def _who(comment: Comment) -> str:
@@ -503,6 +606,15 @@ def brief(task_id: int, auth: AuthCtx, db: DbSession) -> TaskBrief:
 
     assignees = [u.handle or u.name for u in (task.assignee_1, task.assignee_2) if u]
     deploy = task.deploy_state.value + (f": {task.deploy_note[:120]}" if task.deploy_note else "")
+    docs = [f"{d.slug} v{d.current_version} ({d.kind.value}): {d.title[:80]}" for d in task.docs[:8]]
+    context = [
+        (f"{c.repo}:{c.path}" + (f"@{c.ref}" if c.ref else "") if c.path else c.url or "")
+        + f" - {c.title[:60]}"
+        + (f": {c.summary[:100]}" if c.summary else "")
+        for c in task.context[:8]
+    ]
+    files = [f"{f.name} ({_size(f.size)})" for f in task.files if f.removed_at is None][:8]
+    truncated |= len(task.docs) > 8 or len(task.context) > 8
     return TaskBrief(
         id=task.id,
         title=task.title,
@@ -522,6 +634,9 @@ def brief(task_id: int, auth: AuthCtx, db: DbSession) -> TaskBrief:
         last_handback=last_handback,
         git=git,
         deploy=deploy,
+        docs=docs,
+        context=context,
+        files=files,
         truncated=truncated,
     )
 
@@ -563,7 +678,7 @@ def update_task(
     fields = payload.model_dump(exclude_unset=True)
     _check_version(task, fields.pop("expected_version", None))
 
-    if user.role is not Role.leader:
+    if not user.is_lead:
         _assert_worker(task, user)
         if task.status in CLOSED_STATUSES:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The task is closed")
@@ -622,7 +737,7 @@ def change_status(
         check_transition(
             current=task.status,
             target=payload.status,
-            role=user.role,
+            role=user.work_role,
             is_assignee=_is_worker(task, user),
             resume_status=task.resume_status,
         )
@@ -776,7 +891,7 @@ def claim_task(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Only to_do or in_progress tasks can be claimed (task is '{task.status.value}')",
         )
-    if user.role is not Role.leader and user.id not in task.assignee_ids and not task.pool:
+    if not user.is_lead and user.id not in task.assignee_ids and not task.pool:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can claim tasks assigned to you, or pool tasks",
@@ -888,7 +1003,7 @@ def release_task(
     _assert_visible(task, user)
     if task.claimed_by is None:
         return _detail(task)
-    if task.claimed_by != user.id and user.role is not Role.leader:
+    if task.claimed_by != user.id and not user.is_lead:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the claim holder or a leader can release this claim",
@@ -927,6 +1042,8 @@ def add_comment(
     user = auth.user
     _assert_visible(task, user)
     _assert_not_viewer(user)
+    if user.is_bot and task.created_by != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A bot comments only on tasks it proposed")
     body = lint.clean(payload.body, field="body")
 
     parent = None
@@ -1016,7 +1133,7 @@ def resolve_comment(
     comment = db.get(Comment, comment_id)
     if comment is None or comment.task_id != task.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
-    if user.role is not Role.leader and user.id not in {comment.author_id, comment.to_user_id}:
+    if not user.is_lead and user.id not in {comment.author_id, comment.to_user_id}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the author, the person asked or a leader can resolve this")
     if comment.resolved_at is None:
         comment.resolved_at = utcnow()

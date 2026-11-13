@@ -15,6 +15,8 @@ services:
       # Turns on the start-up checks (refuses a weak SECRET_KEY). Set here, not
       # in the env file, so a missing line cannot switch them off.
       APP_ENV: ${TASKFLOW_APP_ENV:-production}
+      # Attachments live in the same volume as the database.
+      FILES_DIR: /data/files
     volumes:
       - taskflow_data:/data
     restart: unless-stopped
