@@ -130,6 +130,76 @@ class TestBots:
         r = client.post(f"/tasks/{own['id']}/comments", headers=bot["headers"], json={"body": "evidence: line 12"})
         assert r.status_code == 201
 
+    def test_tagging_a_bot_notifies_it_without_email(self, client, auth, alice, bot, make_task):
+        task = make_task(title="human task")
+        c = client.post(f"/tasks/{task.id}/comments", headers=auth(alice), json={"body": "@scanner where is the login view?"})
+        assert c.status_code == 201
+        assert "scanner" in c.json()["notified"]
+        rows = client.get("/notifications?unread=true", headers=bot["headers"]).json()
+        assert [(n["kind"], n["comment_id"], n["email_state"]) for n in rows] == [("mention", c.json()["id"], "skipped")]
+
+    def test_bots_hear_only_mentions_and_questions(self, client, auth, leader, bot, make_task):
+        task = make_task(title="t")
+        q = client.post(f"/tasks/{task.id}/comments", headers=auth(leader),
+                        json={"kind": "question", "to": "scanner", "body": "Which tests cover this?"})
+        assert q.status_code == 201
+        kinds = [n["kind"] for n in client.get("/notifications", headers=bot["headers"]).json()]
+        assert kinds == ["question"]
+
+    def test_bot_replies_in_the_thread_that_tagged_it(self, client, auth, alice, bot, make_task, db_session):
+        alice.handle = "alice"
+        db_session.commit()
+        task = make_task(title="human task")
+        top = client.post(f"/tasks/{task.id}/comments", headers=auth(alice), json={"body": "plan looks fine"}).json()
+        tag = client.post(f"/tasks/{task.id}/comments", headers=auth(alice),
+                          json={"body": "@scanner can you check the plan?", "parent_id": top["id"]}).json()
+        other = client.post(f"/tasks/{task.id}/comments", headers=auth(alice), json={"body": "untagged"}).json()
+        # Not without a parent, and not in a thread nobody tagged it in.
+        r = client.post(f"/tasks/{task.id}/comments", headers=bot["headers"], json={"body": "hi"})
+        assert r.status_code == 403
+        r = client.post(f"/tasks/{task.id}/comments", headers=bot["headers"], json={"body": "hi", "parent_id": other["id"]})
+        assert r.status_code == 403
+        # In the tagged thread, a note works.
+        r = client.post(f"/tasks/{task.id}/comments", headers=bot["headers"],
+                        json={"body": "The plan covers both sides. @alice see step 3.", "parent_id": top["id"]})
+        assert r.status_code == 201, r.text
+        assert r.json()["actor_kind"] == "agent"
+        assert "alice" in r.json()["notified"]
+        assert tag["parent_id"] == top["id"]
+
+    def test_bot_answers_questions_asked_of_it(self, client, auth, alice, bob, bot, make_task):
+        task = make_task(title="t")
+        mine = client.post(f"/tasks/{task.id}/comments", headers=auth(alice),
+                           json={"kind": "question", "to": "scanner", "body": "Where is the login view?"}).json()
+        theirs = client.post(f"/tasks/{task.id}/comments", headers=auth(alice),
+                             json={"kind": "question", "to": str(bob.id), "body": "@scanner and Bob: which branch?"}).json()
+        r = client.post(f"/tasks/{task.id}/comments", headers=bot["headers"],
+                        json={"kind": "answer", "body": "Bob owns that.", "parent_id": theirs["id"]})
+        assert r.status_code == 403
+        r = client.post(f"/tasks/{task.id}/comments", headers=bot["headers"],
+                        json={"kind": "answer", "body": "backend/app/routers/auth.py", "parent_id": mine["id"]})
+        assert r.status_code == 201, r.text
+        kinds = [n["kind"] for n in client.get("/notifications", headers=auth(alice)).json()]
+        assert "answered" in kinds
+
+    def test_bot_replies_have_a_daily_cap(self, client, auth, alice, bot, make_task, monkeypatch):
+        from app.config import settings
+        monkeypatch.setattr(settings, "bot_replies_per_day", 1)
+        task = make_task(title="t")
+        top = client.post(f"/tasks/{task.id}/comments", headers=auth(alice), json={"body": "@scanner look"}).json()
+        ok = client.post(f"/tasks/{task.id}/comments", headers=bot["headers"], json={"body": "one", "parent_id": top["id"]})
+        assert ok.status_code == 201
+        r = client.post(f"/tasks/{task.id}/comments", headers=bot["headers"], json={"body": "two", "parent_id": top["id"]})
+        assert r.status_code == 429
+
+    def test_a_bot_does_not_tag_another_bot(self, client, auth, leader, bot):
+        body = {"name": "Second", "email": "second@bots.example.com", "account_type": "bot", "handle": "second"}
+        assert client.post("/users", headers=auth(leader), json=body).status_code == 201
+        own = client.post("/tasks", headers=bot["headers"], json={"title": "Finding"}).json()
+        r = client.post(f"/tasks/{own['id']}/comments", headers=bot["headers"], json={"body": "@second check this"})
+        assert r.status_code == 201
+        assert r.json()["notified"] == []
+
     def test_a_propose_only_token_files_proposals(self, client, auth, leader):
         token = client.post(
             "/auth/tokens", headers=auth(leader), json={"name": "p", "scopes": ["tasks:read", "tasks:propose"]}

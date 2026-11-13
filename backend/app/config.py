@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     rate_login_per_minute: int = 5
     rate_token_reads_per_minute: int = 300
     rate_token_writes_per_minute: int = 60
+    # Replies a bot may post in 24 hours on tasks it did not propose (threads
+    # where someone tagged it or asked it). 0 turns bot replies off.
+    bot_replies_per_day: int = 40
     # Claim lease, in hours.
     claim_default_hours: float = 2
     claim_max_hours: float = 8

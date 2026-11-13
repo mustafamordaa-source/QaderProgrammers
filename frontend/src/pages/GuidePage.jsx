@@ -104,7 +104,7 @@ const SECTIONS = [
       { type: 'h3', text: 'Bot accounts' },
       {
         type: 'p',
-        text: 'A bot account is for an automated agent, such as a code scanner. It cannot sign in with a password. An admin issues its tokens, limited to `tasks:read`, `tasks:propose` and `comments:write`. Everything a bot files lands in proposed, and it can comment on its own proposals only.',
+        text: 'A bot account is for an automated agent, such as a code scanner. It cannot sign in with a password. An admin issues its tokens, limited to `tasks:read`, `tasks:propose` and `comments:write`. Everything a bot files lands in proposed. It comments on its own proposals, and elsewhere it only replies in a thread where someone tagged it or asked it a question. See "Ask the server agent".',
       },
     ],
   },
@@ -394,6 +394,7 @@ const SECTIONS = [
           'Someone assigns you a task.',
           'Someone asks you a question, or answers yours.',
           'Someone writes your @handle in a comment, question, answer, hand-back or task description.',
+          'The server agent (@qader-claude) replies to something you asked it.',
           'A lead approves your work or sends it back.',
           'Leads only: work waits for review, or someone proposes a task.',
         ],
@@ -415,6 +416,49 @@ const SECTIONS = [
       {
         type: 'p',
         text: 'The hub batches email, so a busy hour arrives as one message that lists everything pending. Email settings change in the browser only. A token cannot change them.',
+      },
+    ],
+  },
+  {
+    id: 'ask-bot',
+    title: 'Ask the server agent (@qader-claude)',
+    blocks: [
+      {
+        type: 'p',
+        text: 'Qader Claude is the team's shared AI agent. It runs on a team server with a copy of the code, checks its hub notifications every few minutes, and replies in the same thread. Use it for questions about the code, a plan or a task: where something lives, how a flow works, what a change would touch, or a second look at a plan.',
+      },
+      { type: 'h3', text: 'How to ask' },
+      {
+        type: 'steps',
+        items: [
+          'Open the task and go to its Discussion tab.',
+          'Write `@qader-claude` and your question in a comment. The @ list suggests it as you type. Or set "Post a" to Question and pick Qader Claude in "to".',
+          'Post it. The reply arrives in the same thread within a few minutes, and the hub notifies you like any other reply.',
+          'To follow up, reply in that thread and tag `@qader-claude` again.',
+        ],
+      },
+      {
+        type: 'code',
+        text: '@qader-claude Which endpoint returns the student's streak, and which tests cover it?',
+      },
+      { type: 'h3', text: 'What it does and does not do' },
+      {
+        type: 'list',
+        items: [
+          'It reads the task, its comments, documents and the code, then answers with file paths and short reasons.',
+          'It replies only in the thread that tagged it. It never moves, claims, assigns or closes a task, and it never changes code.',
+          'It cannot see restricted tasks, so tagging it there does nothing.',
+          'It may say it does not know. Check what it says before you act on it, as with any agent.',
+          'It has a daily reply limit. When it reaches the limit, it answers the next day.',
+        ],
+      },
+      {
+        type: 'note',
+        text: 'Its answers show the robot badge and "agent". Treat them as a colleague's first look, not a decision. Ask a lead for decisions.',
+      },
+      {
+        type: 'p',
+        text: 'Agents can ask it too: `qhub comment 12 --body-file q.md` with `@qader-claude` in the text, or `qhub ask 12 --to qader-claude "question"`.',
       },
     ],
   },

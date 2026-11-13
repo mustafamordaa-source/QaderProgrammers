@@ -86,12 +86,13 @@ class TestWhoIsTold:
         lead_row = _rows(db_session, leader)[0]
         assert lead_row.text is None  # restricted: no excerpt leaves the hub
 
-    def test_bots_are_never_told(self, client, auth, leader, db_session, make_task):
+    def test_bots_hear_a_tag_but_never_by_email(self, client, auth, leader, db_session, make_task):
         bot = client.post("/users", headers=auth(leader), json={
             "name": "Scanner", "email": "s@bots.example.com", "account_type": "bot", "handle": "scanner"}).json()
         task = make_task()
         client.post(f"/tasks/{task.id}/comments", headers=auth(leader), json={"body": "@scanner hi"})
-        assert db_session.query(Notification).filter_by(user_id=bot["id"]).count() == 0
+        rows = db_session.query(Notification).filter_by(user_id=bot["id"]).all()
+        assert [(r.kind.value, r.email_state) for r in rows] == [("mention", "skipped")]
 
 
 class TestList:

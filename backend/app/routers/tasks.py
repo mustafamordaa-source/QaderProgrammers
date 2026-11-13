@@ -78,7 +78,7 @@ from app.schemas import (
     TaskUpdate,
 )
 from app.notify import by_handles, leads, mentioned_handles, notify
-from app.models import LinkKind, NotifyKind, TaskKind, TaskLink
+from app.models import LinkKind, Notification, NotifyKind, TaskKind, TaskLink
 from app import templates
 from app.transitions import PARKABLE, PARKING, TransitionError, check_rejection, check_transition
 
@@ -1420,6 +1420,40 @@ def _section(body: str, heading: str) -> str | None:
     return match.group(1).strip() if match and match.group(1) else None
 
 
+def _assert_bot_may_reply(db: Session, bot: User, task: Task, parent: Comment | None, kind: CommentKind) -> None:
+    """A bot comments on its own proposals, and otherwise only replies in a
+    thread where someone tagged it or asked it a question, within a daily cap."""
+    if parent is None or kind not in (CommentKind.note, CommentKind.answer):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="A bot comments only on tasks it proposed, or replies (note or answer, with parent_id) in a thread where someone tagged it",
+        )
+    if kind is CommentKind.answer and parent.to_user_id != bot.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A bot answers only questions asked of it; reply with a note")
+    thread = [parent.id] + [c.id for c in task.comments if c.parent_id == parent.id]
+    tagged = db.scalar(
+        select(func.count(Notification.id)).where(
+            Notification.user_id == bot.id,
+            Notification.task_id == task.id,
+            Notification.comment_id.in_(thread),
+            Notification.kind.in_([NotifyKind.mention, NotifyKind.question]),
+        )
+    )
+    if not tagged:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nobody tagged this bot in that thread")
+    since = utcnow() - timedelta(days=1)
+    sent = db.scalar(
+        select(func.count(Comment.id))
+        .join(Task, Task.id == Comment.task_id)
+        .where(Comment.author_id == bot.id, Comment.created_at >= since, Task.created_by != bot.id)
+    )
+    if (sent or 0) >= settings.bot_replies_per_day:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"This bot reached its limit of {settings.bot_replies_per_day} replies in 24 hours",
+        )
+
+
 @router.get("/{task_id}/comments", response_model=list[CommentOut])
 def list_comments(task_id: int, auth: AuthCtx, db: DbSession) -> list[Comment]:
     task = _get_task_or_404(db, task_id)
@@ -1438,8 +1472,6 @@ def add_comment(
     user = auth.user
     _assert_visible(task, user)
     _assert_not_viewer(user)
-    if user.is_bot and task.created_by != user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A bot comments only on tasks it proposed")
     body = lint.clean(payload.body, field="body")
 
     parent = None
@@ -1449,6 +1481,9 @@ def add_comment(
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="parent_id: no such comment on this task")
         if parent.parent_id is not None:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Reply to the top-level comment; threads are one level deep")
+
+    if user.is_bot and task.created_by != user.id:
+        _assert_bot_may_reply(db, user, task, parent, payload.kind)
 
     to_user = None
     if payload.kind is CommentKind.question:
