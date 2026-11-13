@@ -1,9 +1,15 @@
 # TaskFlow
 
-Internal task management and delivery metrics for a small software team — one
-leader and a handful of programmers. Tasks move through a fixed five-stage
-workflow, can be shared by two programmers at once, and every transition is
-written to an append-only event log that the KPI dashboard is computed from.
+Task tracking and delivery metrics for a small software team and its AI
+agents. People work in the browser; agents work through personal API tokens
+and a small CLI. Every change is written to an append-only event log, marked
+human, agent or system, and the KPI dashboard is computed from that log.
+
+What agents get on top of a plain board: claims with leases (two agents never
+take the same task), acceptance criteria that need evidence before review,
+questions that park a task until answered, a fixed hand-back format, git
+links and deploy state on each task, a 2 KB "brief" read, and a text check
+that refuses secrets and server details.
 
 - **Backend** — FastAPI, SQLAlchemy 2.0, SQLite, JWT auth
 - **Frontend** — React (Vite), Tailwind CSS, Recharts
@@ -22,7 +28,7 @@ python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-python seed.py --reset             # create the DB with demo data
+python seed.py --email you@example.com --name "Your Name"   # migrates, creates the leader
 uvicorn app.main:app --reload      # http://127.0.0.1:8000
 ```
 
@@ -42,38 +48,24 @@ production build pointed at another host, set `VITE_API_URL`.
 
 ### First sign-in
 
-`seed.py` creates one account — the leader — and nothing else. No sample
-programmers, no sample tasks: the board and the dashboards start empty and fill
-with real work.
+`seed.py` runs the migrations and creates one account, the leader. There is no
+default password: pass `--password`, or the script generates a random one and
+prints it once. Add the rest of the team from the **People** screen.
 
-| Role | Email | Password |
-|---|---|---|
-| Leader | `leader@qader.dev` | `password123`, or whatever `--password` sets |
-
-The password is printed when the script runs, which is the only place it is
-surfaced — the login screen deliberately hints at no credentials. Change it
-after signing in, or pass `--password` up front:
-
-```bash
-python seed.py --reset --password 'something-better'
-```
-
-Add the rest of the team from the **People** screen once you are in. Re-running
-the script is a no-op unless you pass `--reset`.
-
-Because nothing is pre-populated, the KPI dashboard is empty until tasks have
-been created and closed.
+`python migrate.py` brings the schema up to date on its own; the server
+container runs it on every start.
 
 ### Tests
 
 ```bash
 cd backend
-.venv/bin/python -m pytest         # 153 tests
+.venv/bin/python -m pytest         # 228 tests
 ```
 
 They cover the transition matrix, the role guards, task visibility, user
-management, the difficulty scale and the KPI arithmetic, each against a fresh
-in-memory database.
+management, the difficulty scale, the KPI arithmetic, API tokens and scopes,
+claims, comments and questions, acceptance criteria, git links, the text
+check, rate limits, and migrating an old database file in place.
 
 ```bash
 cd frontend
@@ -84,41 +76,71 @@ npm run check:routes               # client routes vs API paths (also runs on bu
 
 ## Roles
 
-**Leader** creates tasks, sets priority, difficulty, due date and assignees, and is the only
-role that can move a task to Done. Sees every task and every programmer's
-metrics, can reassign or edit anything, and manages accounts (see
-[People](#people)).
+**Leader** creates and assigns tasks, triages proposals and the backlog, and
+is the only role that can move a task to Done or drop it. Sees every task,
+including restricted ones, and every member's metrics. Manages accounts.
 
-**Programmer** sees only tasks assigned to them. Can move their own work
-forward through the in-progress stages and into review. Cannot create, delete,
-reassign or complete tasks, and sees only their own metrics.
+**Member** (stored as `programmer`) reads every task except restricted ones
+and other people's proposals, so frontend and backend can follow each other's
+work. Works on tasks assigned to them, or pool tasks they claimed: moves them,
+edits summary, tags, areas and side, manages criteria, links commits and PRs,
+sets deploy state. Creates tasks; they land in the backlog for the leader.
 
-Roles are enforced by a FastAPI dependency (`app/deps.py`), not by ad-hoc checks
-in each endpoint.
+**Viewer** reads, nothing else. Meant for a manager who follows the board.
+
+Roles are enforced by FastAPI dependencies (`app/deps.py`) and the checks in
+`app/routers/tasks.py`. A personal API token acts for its owner with the same
+rights, narrowed by the token's scopes.
 
 ## Workflow
 
 ```
-              ┌──────────────────────┐
-              ▼                      │  (leader only, comment required)
-to_do ──┬──▶ in_progress_front ──┬──▶ in_review ──▶ done   (leader only)
-        │         ▲    │         │        │
-        │         │    ▼         │        │
-        └──▶ in_progress_back ───┘        │
-                  ▲                       │
-                  └───────────────────────┘
+proposed ──▶ backlog ──▶ to_do ──▶ in_progress ──▶ in_review ──▶ done
+                                       ▲               │
+                                       └───────────────┘  leader: reject (comment required)
+
+any open working status ──▶ blocked / needs_confirm ──▶ back to where it was
+leader only: proposed/backlog triage, done, dropped (reason required)
 ```
 
-A task only passes through the stages its work actually needs — frontend-only,
-backend-only, or both. The two in-progress stages are reachable from each other,
-so a shared task can do backend work and then frontend work without a round
-trip through review.
+- `side` (fe, be, mobile, content, infra, qa, other) says what kind of work a
+  task is. It replaced the old `in_progress_front` / `in_progress_back`
+  statuses; old event rows keep those values and the KPIs read them as
+  `in_progress`.
+- Moving to `in_review` or `done` is refused while any acceptance criterion
+  is open. An agent must post a hand-back comment before moving to review.
+- A question with `wait` parks the task in `needs_confirm`; the answer to the
+  last open question returns it to where it was.
+- Every write may send `expected_version`; a stale version gets `409`.
 
-The whole matrix lives in `backend/app/transitions.py`. Nothing reaches `done`
-except from `in_review`, no programmer can write `done`, and `done` is terminal.
-The frontend mirrors these rules in `frontend/src/lib/constants.js` purely so
-the UI offers only moves that will be accepted — the server re-validates every
-request regardless.
+The whole matrix lives in `backend/app/transitions.py`. The frontend mirrors
+it in `frontend/src/lib/constants.js` only so the UI offers valid moves; the
+server re-validates every request.
+
+## Agents
+
+1. A person creates a token on **Settings** (browser login only, so a leaked
+   token cannot mint more). Scopes: `tasks:read`, `tasks:write`,
+   `tasks:create`, `comments:write`, `claims`, `git:write`. Expiry is
+   required, 90 days at most. Only a SHA-256 of the secret is stored.
+2. The agent sends `Authorization: Bearer qhub_...` and, on every write,
+   `X-Agent: <agent name>`. Everything it writes is marked `actor_kind=agent`
+   with that name; nobody can set that flag by hand.
+3. `POST /tasks/{id}/claim` takes a lease (2 hours by default, 8 at most,
+   renewed by claiming again). One SQL statement decides the race, so a
+   second agent gets `409`. Claims warn when a person goes over their WIP
+   limit or another claimed task shares a file area.
+4. `GET /tasks/{id}/brief` returns what an agent needs in about 2 KB.
+   `GET /tasks/{id}/events?since=ID` returns only what changed.
+5. Hand-back comments need `Summary:`, `Checks run:` and `Left:` lines; the
+   summary becomes the task's rolling summary.
+6. Text checks (`app/lint.py`) refuse private keys, tokens, `KEY=value`
+   secrets, IP addresses and private paths, and strip invisible characters
+   that can hide instructions. Arabic text and its direction marks pass.
+7. Rate limits: login 5 per minute per address, token reads 300 and writes
+   60 per minute.
+
+The CLI and the agent skill that drive this API live in the Qader monorepo.
 
 ## Dual assignment
 
@@ -176,23 +198,35 @@ picker says so.
 
 ## Data model
 
-**users** — id, name, email, password_hash, role, is_active, created_at
+**users**: id, name, email, password_hash, role, is_active, created_at,
+handle, github_login, sides, wip_limit
 
-**tasks** — id, title, description, priority, points, status, due_date,
-created_by, assignee_1_id, assignee_2_id, created_at, updated_at
+**tasks**: id, title, description, priority, points, status, due_date,
+created_by, assignee_1_id, assignee_2_id, created_at, updated_at, side, tags,
+areas, summary, version, restricted, pool, resume_status, created_kind,
+created_agent, claimed_by, claim_agent, claim_branch, claim_expires_at,
+deploy_state, deploy_note, deployed_at, drop_reason
 
-**task_events** — id, task_id, actor_id, event_type, from_status, to_status,
-comment, timestamp
+**task_events**: id, task_id, actor_id, event_type, from_status, to_status,
+comment, timestamp, actor_kind, agent_name, token_id, data
 
-`task_events` is append-only and is the sole input to every KPI. Event types:
+**comments**, **task_criteria**, **git_links**, **api_tokens**: see
+`backend/app/models.py`.
+
+`task_events` is append-only: SQLite triggers refuse UPDATE and DELETE. It is
+the sole input to every KPI. The KPI layer reads five event types:
 
 | Event | When |
 |---|---|
-| `created` | A leader creates the task |
+| `created` | A task is created |
 | `status_changed` | Any ordinary move between stages |
 | `rejected` | A leader sends work back out of review (comment required) |
 | `approved` | A leader accepts work out of review |
 | `closed` | The task's life cycle ends |
+
+The other event types (claimed, released, assigned, field_changed, commented,
+question_asked, question_answered, criterion_added, criterion_changed,
+git_linked, deployed, dropped) feed the history view.
 
 Approving writes `approved` **and** `closed` in one transaction. They are
 separate KPI inputs: `approved` feeds the review pass rate, `closed` marks the
@@ -252,36 +286,50 @@ reassignment does not split one six-hour stay into two three-hour ones.
 
 ## API
 
+Full, interactive reference: `/api/docs` on the server, `/docs` locally.
+
 ```
-POST   /auth/login                 email + password → JWT
-GET    /auth/me                    current user
-GET    /auth/users?role=           active-user directory (for the assignment UI)
+POST   /auth/login                  email + password -> JWT (rate limited)
+GET    /auth/me                     current user
+GET    /auth/users?role=            active-user directory
+GET    /auth/scopes                 token scopes
+GET    /auth/tokens                 your API tokens (browser login only)
+POST   /auth/tokens                 create one; the secret is shown once
+DELETE /auth/tokens/{id}            revoke (yours; a leader: anyone's)
 
-GET    /users                      leader only — everyone, with open-task counts
-POST   /users                      leader only — create an account
-PATCH  /users/{id}                 leader only — name, email, role, is_active
-POST   /users/{id}/password        leader only — reset a password
+GET    /users                       leader: everyone, with open-task counts
+POST   /users                       leader: create an account
+PATCH  /users/{id}                  leader: name, email, role, profile, is_active
+POST   /users/{id}/password         leader: reset a password
 
-POST   /tasks                      leader only — create and assign
-GET    /tasks                      leader: all · programmer: own queue only
-GET    /tasks/{id}                 includes the full event log
-PATCH  /tasks/{id}                 leader only — edit title/priority/due date
-PATCH  /tasks/{id}/status          move a task; validated server-side
-PATCH  /tasks/{id}/assign          leader only — reassign
-POST   /tasks/{id}/reject          leader only — back to in-progress, comment required
+POST   /tasks                       create (members: into backlog)
+GET    /tasks                       ?mine ?ready ?side ?tag ?q ?status_filter ?include_closed
+GET    /tasks/inbox                 questions to you, your parked tasks, leader queues
+GET    /tasks/{id}                  full detail: events, comments, criteria, links
+GET    /tasks/{id}/brief            what an agent needs, about 2 KB
+GET    /tasks/{id}/events?since=    events after an id
+PATCH  /tasks/{id}                  edit fields (expected_version optional)
+PATCH  /tasks/{id}/status           move a task; validated server-side
+PATCH  /tasks/{id}/assign           leader: reassign
+POST   /tasks/{id}/reject           leader: back to in_progress, comment required
+POST   /tasks/{id}/claim            take or renew a lease; 409 if someone holds it
+POST   /tasks/{id}/release          drop your claim
+GET    /tasks/{id}/comments
+POST   /tasks/{id}/comments         note, question, answer, decision, review, handback
+POST   /tasks/{id}/comments/{cid}/resolve
+POST   /tasks/{id}/criteria         add an acceptance criterion
+PATCH  /tasks/{id}/criteria/{n}     met (evidence required), dropped, open
+POST   /tasks/{id}/git              link a branch, PR or commit (upserts)
+PATCH  /tasks/{id}/deploy           none, staging, production + note
 
-GET    /kpi/team                   leader only — team totals + per-programmer
-GET    /kpi/me                     own metrics
-GET    /kpi/programmer/{id}        leader only
+GET    /kpi/team   /kpi/me   /kpi/programmer/{id}
 GET    /health
 ```
 
-KPI endpoints accept optional `range_start` and `range_end` (ISO 8601, UTC);
-they default to the last 90 days.
-
-Error conventions: `401` unauthenticated, `403` wrong role, `404` missing *or
-not visible to you* (so the API never confirms a task exists to someone who
-shouldn't see it), `409` an illegal status transition, `422` invalid input.
+Error conventions: `401` unauthenticated, `403` wrong role or missing scope,
+`404` missing *or not visible to you*, `409` an illegal transition, a claim
+held by someone else, open criteria or a stale version, `422` invalid input or
+text the hub refuses, `429` rate limited.
 
 ## Project layout
 
@@ -315,7 +363,7 @@ frontend/
 
 ### Client routes vs API paths
 
-The client routes are `/login`, `/board`, `/metrics` and `/people`. None of them
+The client routes are `/login`, `/board`, `/inbox`, `/metrics`, `/people` and `/settings`. None of them
 may share a prefix with an API path (`/auth`, `/tasks`, `/users`, `/kpi`,
 `/health`), because the Vite dev proxy matches by prefix: a client route named
 after an API prefix gets handed to the backend on any hard page load — a
@@ -331,20 +379,34 @@ Backend settings come from the environment (or a `backend/.env` file):
 
 | Variable | Default | Notes |
 |---|---|---|
+| `APP_ENV` | `development` | `production` refuses a known or short `SECRET_KEY`; docker-compose sets it |
 | `SECRET_KEY` | `dev-secret-change-me` | **Change this outside local development** |
 | `DATABASE_URL` | `sqlite:///./taskflow.db` | |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `480` | |
 | `CORS_ORIGINS` | Vite's dev origins | |
+| `API_TOKEN_MAX_DAYS` | `90` | Longest API token lifetime |
+| `RATE_LOGIN_PER_MINUTE` | `5` | Per address and email |
+| `RATE_TOKEN_READS_PER_MINUTE` / `RATE_TOKEN_WRITES_PER_MINUTE` | `300` / `60` | Per token |
+| `LINT_BLOCKED_ID_PREFIXES` | empty | Task ID prefixes the text check refuses |
 
 ## Deployment
 
 A push to `main` deploys to `https://tasks.qader.vip`. GitHub Actions
-(`.github/workflows/deploy.yml`) runs the backend tests on `ubuntu-latest`,
-then a self-hosted runner on the Qader staging server (label `taskflow`) runs
-`scripts/deploy.sh`. The script rebuilds the containers, waits for
-`/api/health`, and prints the container logs if the API never answers. A
-failing test blocks the deploy. You can also start the workflow by hand from
-the Actions tab, or run `./scripts/deploy.sh` from the repo root on the server.
+(`.github/workflows/deploy.yml`) runs one job on a self-hosted runner on the
+Qader staging server (label `taskflow`), so it uses no GitHub-hosted minutes.
+`scripts/deploy.sh` then:
+
+1. takes the shared deploy lock (`/tmp/qader-deploy.lock`), so it never
+   builds while the Qader staging deploy builds;
+2. waits for 2 GB of free memory (15 minutes at most);
+3. runs the test suite in a Docker build stage; a failure stops here;
+4. backs up the database from the running container to `/data/backups`
+   (newest 14 kept);
+5. rebuilds and restarts; the API container runs `python migrate.py` first;
+6. waits for `/api/health`, or prints the logs and the restore steps.
+
+Never add a `pull_request` trigger to the workflow: the runner sits on the
+staging server.
 
 ### How the pieces connect
 
@@ -371,20 +433,19 @@ the Actions tab, or run `./scripts/deploy.sh` from the repo root on the server.
   `/data/taskflow.db` inside `taskflow_api`. Deploys keep it.
 - Seed the first leader account once, after the first deploy:
   ```sh
-  docker exec -it taskflow_api python seed.py --password '<strong password>'
+  docker exec -it taskflow_api python seed.py --email <you> --name "<name>"
   ```
-  **Never run `seed.py --reset` on staging.** It wipes the data.
+  It prints a random password once. `seed.py --reset` is refused when
+  `APP_ENV=production`.
+- Back up by hand: `docker exec taskflow_api python backup.py /data/backups --label manual`.
 
 ### Schema changes
 
-The app builds tables with `Base.metadata.create_all`, which never adds a
-column to an existing table. If your change adds or renames a column, run a
-manual `ALTER TABLE` against `/data/taskflow.db` on the server before or right
-after the deploy, and say so in the commit message. For example:
-
-```sh
-docker exec taskflow_api python -c "import sqlite3; c=sqlite3.connect('/data/taskflow.db'); c.execute('ALTER TABLE tasks ADD COLUMN example INTEGER NOT NULL DEFAULT 0'); c.commit()"
-```
+Alembic manages the schema (`backend/migrations/`). Add a revision under
+`migrations/versions/` for every model change; the API container applies it
+on start, after `deploy.sh` has taken a backup. `migrate.py` stamps a
+database made by the old `create_all` start-up at the baseline before
+upgrading it, so the staging database moves over without manual SQL.
 
 ### Running the containers locally
 
@@ -393,10 +454,10 @@ the server path. To try the production build on your machine:
 
 ```sh
 docker network create qader_qader_network
-printf 'SECRET_KEY=local-test\nDATABASE_URL=sqlite:////data/taskflow.db\n' > /tmp/taskflow.env
+printf 'SECRET_KEY=%s\nDATABASE_URL=sqlite:////data/taskflow.db\n' "$(python3 -c 'import secrets;print(secrets.token_urlsafe(48))')" > /tmp/taskflow.env
 TASKFLOW_ENV_FILE=/tmp/taskflow.env docker compose up -d --build
 docker exec taskflow_web wget -qO- http://127.0.0.1/api/health   # {"status":"ok"}
-docker exec taskflow_api python seed.py --password test1234
+docker exec taskflow_api python seed.py --email lead@example.com --password test-password-1234
 ```
 
 To click through the UI, add `ports: ["8080:80"]` to `web` for the test only
@@ -405,15 +466,12 @@ with `docker compose down -v && docker network rm qader_qader_network`.
 
 ## Notes for future work
 
-- The schema is created with `Base.metadata.create_all`, which adds new tables
-  but **not new columns to existing ones**. An existing `taskflow.db` from
-  before `users.is_active` or `tasks.points` was added will fail on startup;
-  re-run `python seed.py --reset`. This is the point at which Alembic stops being
-  optional — the next schema change that has to preserve real data needs it.
-- Tokens are stored in `localStorage`, which is appropriate for an internal tool
-  but is not XSS-proof. Move to an httpOnly cookie if this is ever exposed more
-  widely.
+- Browser logins keep their token in `localStorage`, which is fine for an
+  internal tool but is not XSS-proof. Move to an httpOnly cookie if this is
+  ever exposed more widely.
 - KPI aggregation folds tasks in Python rather than in SQL. That is the right
-  trade at this team's scale — the per-task event walk needs ordering and
-  look-ahead, and it stays readable and directly unit-testable. Revisit if the
-  task table reaches the tens of thousands.
+  trade at this team's scale. Revisit if the task table reaches the tens of
+  thousands.
+- Next steps: GitHub webhook for PR and deploy state, task documents with
+  version history, task links and subtasks, templates per task kind, a triage
+  queue for machine-filed proposals.
