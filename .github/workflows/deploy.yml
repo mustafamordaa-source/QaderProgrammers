@@ -20,7 +20,7 @@ jobs:
     # "taskflow". Tests run inside a Docker build stage in deploy.sh, so this
     # workflow uses no GitHub-hosted minutes.
     runs-on: [self-hosted, taskflow]
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

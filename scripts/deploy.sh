@@ -20,7 +20,7 @@ cd "$(dirname "$0")/.."
 env_file="${TASKFLOW_ENV_FILE:-/opt/docker/taskflow/.env}"
 lock_file="${DEPLOY_LOCK:-/tmp/qader-deploy.lock}"
 min_free_mb="${DEPLOY_MIN_FREE_MB:-2048}"
-wait_minutes="${DEPLOY_WAIT_MINUTES:-15}"
+wait_minutes="${DEPLOY_WAIT_MINUTES:-30}"
 backup_dir=/data/backups
 sha="$(git rev-parse --short HEAD 2>/dev/null || echo manual)"
 
