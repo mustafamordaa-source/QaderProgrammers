@@ -143,7 +143,7 @@ class TestSubtasks:
 # --- GitHub webhook ---------------------------------------------------------------
 
 SECRET = "webhook-test-secret"
-REPO = "J3ffar/Qader"
+REPO = "example-org/app"
 
 
 @pytest.fixture()

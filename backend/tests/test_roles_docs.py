@@ -309,7 +309,7 @@ class TestContext:
         two = make_task(title="Accounts frontend", assignee_1=alice)
         h = auth(alice)
         link = {
-            "kind": "repo_path", "repo": "J3ffar/Qader",
+            "kind": "repo_path", "repo": "example-org/app",
             "path": "plans/cross-team/2026-11-13/ready-accounts.md", "ref": "develop",
             "title": "Ready accounts plan", "summary": "Endpoint, CSV format, admin screen",
         }
