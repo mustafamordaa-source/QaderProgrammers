@@ -158,6 +158,31 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   page you can see, searchable, with shared repo files listed once. Agents
   read it before writing a new plan.
 
+## Notifications and email
+
+The hub tells a person when they are assigned, asked a question, answered,
+`@mentioned` (by handle, in a comment or a task description), when their
+work is approved or sent back, and, for leads, when work waits for review or
+a new task is proposed. Nobody is told about their own action; bots,
+deactivated people and people who cannot see the task are never told. For a
+restricted task the notification carries no text.
+
+Every notification shows in the app (bell and `GET /notifications`). Email
+is a channel on top:
+
+- Turn it on by setting `SMTP_HOST`, `SMTP_FROM` and, for Gmail,
+  `SMTP_USER` plus an **app password** in `SMTP_PASSWORD` on the server
+  (`.env.example` lists them). The password never goes in the repo.
+- A sender thread in the API batches: once a person's oldest unsent
+  notification is `EMAIL_BATCH_SECONDS` old, they get one email listing
+  everything pending. Failed sends retry up to 5 times. Caps per person per
+  hour and per day keep the hub inside Gmail's limits.
+- Each person picks which kinds they get by email, or turns email off, on
+  **Settings**, and may send it to an address other than their login email.
+  `POST /notifications/test` sends them a test email.
+- Admins see the sender's state at `GET /notifications/status` (never the
+  password).
+
 ## Agents
 
 1. A person creates a token on **Settings** (browser login only, so a leaked
@@ -373,6 +398,10 @@ GET    /tasks/{id}/files/{fid}      download; DELETE to remove
 POST   /tasks/{id}/context          link a repo file or page; DELETE to remove
 GET    /library                     documents and linked files, ?q ?repo ?kind
 POST   /users/{id}/tokens           admin: issue a bot token
+GET    /notifications               yours (?unread); /count; POST /read {ids | all}
+GET    /notifications/preferences   your email settings; PATCH to change (browser only)
+POST   /notifications/test          send yourself a test email
+GET    /notifications/status        admin: is email on, pending, failed, last error
 
 GET    /kpi/team   /kpi/me   /kpi/programmer/{id}
 GET    /health

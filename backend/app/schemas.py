@@ -88,6 +88,7 @@ class UserOut(ORMModel):
     created_at: datetime
     handle: str | None = None
     sides: list[Side] = []
+    email_notifications: bool = True
 
 
 class UserBrief(ORMModel):
@@ -224,6 +225,8 @@ class CommentOut(ORMModel):
     to_user: UserBrief | None = None
     resolved_at: datetime | None
     created_at: datetime
+    # Filled on create only: handles the hub notified.
+    notified: list[str] = []
 
 
 class CriterionOut(ORMModel):

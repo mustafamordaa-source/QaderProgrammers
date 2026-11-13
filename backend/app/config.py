@@ -55,6 +55,35 @@ class Settings(BaseSettings):
     # Hosts a context link may point at (a host matches itself and its subdomains).
     context_url_hosts: str = "github.com,qader.com,qader.vip"
 
+    # --- email notifications --------------------------------------------------
+    # Gmail: smtp.gmail.com, port 587, STARTTLS, the account address as user
+    # and an app password (needs 2-step verification on that account).
+    # Email stays off until SMTP_HOST and SMTP_FROM are set.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_from_name: str = "Team hub"
+    smtp_starttls: bool = True
+    smtp_timeout_seconds: int = 20
+    # Links in emails point here.
+    hub_base_url: str = "http://127.0.0.1:5173"
+    # Wait this long after a person's first unsent notification, then send
+    # one email with everything pending for them.
+    email_batch_seconds: int = 120
+    email_poll_seconds: int = 30
+    email_max_per_user_hour: int = 20
+    # Gmail allows about 500 recipients a day on a normal account.
+    email_max_per_day: int = 400
+    email_max_attempts: int = 5
+    # "auto": run the sender when SMTP is set; "off": never (tests, scripts).
+    email_sender: str = "auto"
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.smtp_host and self.smtp_from)
+
 
 def check_production_settings(s: "Settings") -> None:
     """Refuse to run in production with a public or short signing key."""

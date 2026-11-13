@@ -243,6 +243,11 @@ class User(Base):
     account_type: Mapped[AccountType] = mapped_column(
         _str_enum(AccountType, "account_type"), default=AccountType.person, nullable=False
     )
+    # Notifications: email on or off, which kinds, and an optional address
+    # other than the login email.
+    email_notifications: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_kinds: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    notify_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     @property
     def effective_roles(self) -> list[str]:
@@ -675,3 +680,54 @@ event.listen(
         "BEGIN SELECT RAISE(ABORT, 'task_doc_versions is append-only'); END"
     ).execute_if(dialect="sqlite"),
 )
+
+
+class NotifyKind(str, enum.Enum):
+    assigned = "assigned"
+    question = "question"
+    answered = "answered"
+    mention = "mention"
+    review = "review"
+    rejected = "rejected"
+    approved = "approved"
+    proposal = "proposal"
+
+
+# What a person gets by email unless they change it. Leads also get
+# review and proposal, which only leads receive at all.
+DEFAULT_EMAIL_KINDS: tuple[str, ...] = (
+    "assigned", "question", "answered", "mention", "rejected", "review", "proposal",
+)
+
+
+class Notification(Base):
+    """One thing a person should know about. Shown in the app; also an
+    outbox row for the email sender, which batches pending rows per person."""
+
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False)
+    # The comment that caused it (question, answer, mention), so an agent can
+    # reply to exactly that comment.
+    comment_id: Mapped[int | None] = mapped_column(ForeignKey("comments.id"), nullable=True)
+    kind: Mapped[NotifyKind] = mapped_column(_str_enum(NotifyKind, "notify_kind"), nullable=False)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    actor_kind: Mapped[ActorKind] = mapped_column(
+        _str_enum(ActorKind, "notify_actor_kind"), default=ActorKind.human, nullable=False
+    )
+    agent_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Short excerpt; empty for restricted tasks.
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # pending -> sent | skipped | failed
+    email_state: Mapped[str] = mapped_column(String(8), default="skipped", nullable=False, index=True)
+    email_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    emailed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    email_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    user: Mapped[User] = relationship(foreign_keys=[user_id], lazy="joined")
+    actor: Mapped[User | None] = relationship(foreign_keys=[actor_id], lazy="joined")
+    task: Mapped[Task] = relationship(lazy="joined")

@@ -18,17 +18,18 @@ _hits: dict[str, deque[float]] = defaultdict(deque)
 _lock = threading.Lock()
 
 
-def hit(key: str, limit_per_minute: int) -> None:
-    """Record one request for `key`; raise 429 when over the limit."""
+def hit(key: str, limit_per_minute: int, window_seconds: float = _WINDOW_SECONDS) -> None:
+    """Record one request for `key`; raise 429 when more than `limit_per_minute`
+    requests fall inside the window (60 s unless `window_seconds` says otherwise)."""
     if limit_per_minute <= 0:
         return
     now = time.monotonic()
     with _lock:
         bucket = _hits[key]
-        while bucket and now - bucket[0] >= _WINDOW_SECONDS:
+        while bucket and now - bucket[0] >= window_seconds:
             bucket.popleft()
         if len(bucket) >= limit_per_minute:
-            retry = max(1, int(_WINDOW_SECONDS - (now - bucket[0])))
+            retry = max(1, int(window_seconds - (now - bucket[0])))
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many requests. Try again shortly.",

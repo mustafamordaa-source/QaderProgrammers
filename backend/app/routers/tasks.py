@@ -72,6 +72,8 @@ from app.schemas import (
     TaskOut,
     TaskUpdate,
 )
+from app.notify import by_handles, leads, mentioned_handles, notify
+from app.models import NotifyKind
 from app.transitions import PARKABLE, PARKING, TransitionError, check_rejection, check_transition
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -83,6 +85,10 @@ HANDBACK_REQUIRED = ("Summary:", "Checks run:", "Left:")
 
 
 # --- helpers ------------------------------------------------------------------
+
+
+def _people(db: Session, ids) -> list[User]:
+    return [u for u in (db.get(User, i) for i in ids if i is not None) if u is not None]
 
 
 def _not_found() -> HTTPException:
@@ -357,6 +363,14 @@ def create_task(
         to_status=start,
         timestamp=task.created_at,
     )
+    db.flush()
+    if start is S.proposed:
+        notify(db, auth, users=leads(db), task=task, kind=NotifyKind.proposal, text=task.title)
+    else:
+        notify(db, auth, users=_people(db, task.assignee_ids), task=task,
+               kind=NotifyKind.assigned, text=task.summary or task.description)
+    notify(db, auth, users=by_handles(db, mentioned_handles(task.description)), task=task,
+           kind=NotifyKind.mention, text=task.description)
     db.commit()
     return _detail(_get_task_or_404(db, task.id))
 
@@ -521,6 +535,9 @@ def triage(
             event_type=EventType.dropped if payload.to is S.dropped else EventType.triaged,
             from_status=from_status, to_status=payload.to, comment=reason, data=changes or None,
         )
+        if "assignee_1_id" in changes:
+            notify(db, auth, users=_people(db, [task.assignee_1_id]), task=task,
+                   kind=NotifyKind.assigned, text=task.summary or task.description)
         results.append(TriageResult(id=task_id, ok=True, status=payload.to))
     db.commit()
     return results
@@ -806,6 +823,13 @@ def change_status(
         record(db, auth, task_id=task.id, event_type=EventType.status_changed,
                from_status=from_status, to_status=target, comment=comment, timestamp=now)
 
+    workers = _people(db, task.assignee_ids)
+    if target is S.in_review:
+        notify(db, auth, users=leads(db), task=task, kind=NotifyKind.review, text=task.summary or comment)
+    elif from_status is S.in_review and target is S.done:
+        notify(db, auth, users=workers, task=task, kind=NotifyKind.approved, text=comment)
+    elif from_status is S.in_review and target is S.in_progress:
+        notify(db, auth, users=workers, task=task, kind=NotifyKind.rejected, text=comment)
     db.commit()
     return _detail(_get_task_or_404(db, task.id))
 
@@ -834,6 +858,8 @@ def assign_task(
         comment=f"Reassigned from {before or 'nobody'} to {task.assignee_ids or 'nobody'}",
         data={"from": before, "to": task.assignee_ids},
     )
+    new_people = [i for i in task.assignee_ids if i not in before]
+    notify(db, auth, users=_people(db, new_people), task=task, kind=NotifyKind.assigned, text=task.summary or task.description)
     db.commit()
     return _detail(_get_task_or_404(db, task.id))
 
@@ -866,6 +892,8 @@ def reject_task(
         to_status=payload.to_status,
         comment=lint.clean(payload.comment, field="comment"),
     )
+    notify(db, auth, users=_people(db, task.assignee_ids), task=task,
+           kind=NotifyKind.rejected, text=payload.comment)
     db.commit()
     return _detail(_get_task_or_404(db, task.id))
 
@@ -1115,8 +1143,24 @@ def add_comment(
         record(db, auth, task_id=task.id, event_type=EventType.commented,
                data={"comment_id": comment.id, "kind": payload.kind.value})
 
+    told = []
+    if payload.kind is CommentKind.question:
+        told += notify(db, auth, users=[to_user], task=task, kind=NotifyKind.question, text=body, comment_id=comment.id)
+    elif payload.kind is CommentKind.answer:
+        told += notify(db, auth, users=_people(db, [parent.author_id]), task=task, kind=NotifyKind.answered, text=body, comment_id=comment.id)
+    already = {to_user.id} if to_user else set()
+    if payload.kind is CommentKind.answer:
+        already.add(parent.author_id)
+    mentioned = [u for u in by_handles(db, mentioned_handles(body)) if u.id not in already]
+    told += notify(db, auth, users=mentioned, task=task, kind=NotifyKind.mention, text=body, comment_id=comment.id)
+    notified_ids = [n.user_id for n in told]
+
     db.commit()
     db.refresh(comment)
+    # Who the hub actually told, so an agent can confirm a mention landed.
+    comment.notified = [
+        (u.handle or u.name) for u in _people(db, notified_ids)
+    ]
     return comment
 
 

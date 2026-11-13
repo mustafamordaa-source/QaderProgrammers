@@ -44,6 +44,10 @@ def _relaxed_rate_limits(monkeypatch):
     monkeypatch.setattr(settings, "rate_login_per_minute", 10_000)
     monkeypatch.setattr(settings, "rate_token_reads_per_minute", 10_000)
     monkeypatch.setattr(settings, "rate_token_writes_per_minute", 10_000)
+    # No real email from tests; the email tests switch a fake server on.
+    monkeypatch.setattr(settings, "smtp_host", "")
+    monkeypatch.setattr(settings, "smtp_from", "")
+    monkeypatch.setattr(settings, "email_sender", "off")
     yield
     ratelimit.reset()
 
