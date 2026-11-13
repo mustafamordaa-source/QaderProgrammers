@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { TOKEN_MAX_DAYS } from '../lib/constants'
@@ -88,7 +89,21 @@ export default function SettingsPage() {
       <NotificationSettings />
       {isAdmin && <EmailSenderStatus />}
 
-      <h2 className="text-base font-semibold tracking-tight">API tokens</h2>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-base font-semibold tracking-tight">API tokens</h2>
+        <Link
+          to="/guide#agents"
+          className="inline-flex items-center gap-1.5 text-sm text-series1 hover:underline"
+        >
+          <span
+            aria-hidden="true"
+            className="grid h-4 w-4 place-items-center rounded-full border border-series1/50 text-[10px] font-semibold"
+          >
+            ?
+          </span>
+          How to connect an agent
+        </Link>
+      </div>
       <p className="mb-4 mt-0.5 text-sm text-ink-secondary">
         Personal API tokens let your AI agents work in TaskFlow as you, limited to the scopes
         you pick. An agent must name itself in the X-Agent header.

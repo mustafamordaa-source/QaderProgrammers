@@ -44,6 +44,9 @@ export default function AppShell() {
               <NavLink to="/settings" className={navClass}>
                 Settings
               </NavLink>
+              <NavLink to="/guide" className={navClass}>
+                Guide
+              </NavLink>
             </nav>
 
             <div className="ml-auto flex items-center gap-3">

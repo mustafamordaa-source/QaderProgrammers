@@ -9,6 +9,7 @@ import UsersPage from './pages/UsersPage'
 import InboxPage from './pages/InboxPage'
 import SettingsPage from './pages/SettingsPage'
 import DocumentsPage from './pages/DocumentsPage'
+import GuidePage from './pages/GuidePage'
 
 export default function App() {
   return (
@@ -35,6 +36,7 @@ export default function App() {
             }
           />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/guide" element={<GuidePage />} />
         </Route>
         <Route path="*" element={<Navigate to="/board" replace />} />
       </Routes>

@@ -238,7 +238,8 @@ is a channel on top:
 
 1. A person creates a token on **Settings** (browser login only, so a leaked
    token cannot mint more). Scopes: `tasks:read`, `tasks:write`,
-   `tasks:create`, `comments:write`, `claims`, `git:write`. Expiry is
+   `tasks:create`, `comments:write`, `claims`, `git:write`, `docs:write`
+   (bots: `tasks:propose`). Expiry is
    required, 90 days at most. Only a SHA-256 of the secret is stored.
 2. The agent sends `Authorization: Bearer qhub_...` and, on every write,
    `X-Agent: <agent name>`. Everything it writes is marked `actor_kind=agent`
@@ -499,7 +500,7 @@ frontend/
 
 ### Client routes vs API paths
 
-The client routes are `/login`, `/board`, `/inbox`, `/documents`, `/metrics`, `/people` and `/settings`. None of them
+The client routes are `/login`, `/board`, `/inbox`, `/documents`, `/guide`, `/metrics`, `/people` and `/settings`. None of them
 may share a prefix with an API path (`/auth`, `/tasks`, `/users`, `/kpi`,
 `/health`), because the Vite dev proxy matches by prefix: a client route named
 after an API prefix gets handed to the backend on any hard page load — a
