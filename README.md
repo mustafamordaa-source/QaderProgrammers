@@ -534,7 +534,7 @@ Qader staging server (label `taskflow`), so it uses no GitHub-hosted minutes.
 
 1. takes the shared deploy lock (`/tmp/qader-deploy.lock`), so it never
    builds while the Qader staging deploy builds;
-2. waits for 2 GB of free memory (15 minutes at most);
+2. waits for the lock and then for 2 GB of free memory (30 minutes at most each);
 3. runs the test suite in a Docker build stage; a failure stops here;
 4. backs up the database from the running container to `/data/backups`
    (newest 14 kept);
