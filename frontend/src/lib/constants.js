@@ -570,5 +570,5 @@ export function parseTaskRef(value) {
 
 /** A link that opens the task's dialog on the board, for sharing. */
 export function taskLink(id) {
-  return `${window.location.origin}/tasks/${id}`
+  return `${window.location.origin}/t/${id}`
 }
