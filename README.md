@@ -117,6 +117,47 @@ The whole matrix lives in `backend/app/transitions.py`. The frontend mirrors
 it in `frontend/src/lib/constants.js` only so the UI offers valid moves; the
 server re-validates every request.
 
+## Roles in more detail
+
+A person holds one or more **access roles**; their rights add up.
+
+| Role | Can |
+|---|---|
+| Admin | Everything a lead can, plus people, bot accounts, everyone's tokens |
+| Lead | Triage proposals and the backlog (one by one or in bulk), assign, approve, reject, drop, see restricted work |
+| Member | Be assigned, claim, move and document their own tasks, create tasks into the backlog |
+| Viewer | Read; ignored when combined with another role |
+
+**Works on** (fe, be, mobile, content, infra, qa, design) is separate: it says
+which kinds of work a person picks up, and it can hold several. A full-stack
+admin is `roles: [admin, lead, member]`, `sides: [fe, be, infra]`.
+
+A **bot** account (`account_type: bot`) is for an automated agent, such as a
+server-side scanner. It cannot log in with a password; an admin issues its
+tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
+`tasks:propose` and `comments:write`. Everything it files lands in
+`proposed`, and it can comment only on its own proposals.
+
+## Documents, files and context
+
+- **Documents**: Markdown on a task (spec, plan, notes, test plan, decision,
+  hand-over). Each save is a full new version with author, human or agent,
+  and a note. A save names the version it edited; a newer save in between
+  gets `409`. History, diffs between any two versions and restore are built
+  in. Version rows cannot be edited in the database.
+- **Files**: PNG, JPEG, GIF, WebP, PDF, TXT, MD, CSV, JSON, LOG; 10 MB each,
+  200 MB in total. No SVG or HTML. Images are checked by their first bytes,
+  text files pass the text check, and downloads are served with `nosniff`
+  and a sandbox CSP.
+- **Context links**: where to read more, either a file in a git repo (repo,
+  path, branch, commit) or an https page on an allowed host, each with a
+  summary. Use them for plans in a repo's `plans/` folder, API contract
+  sections and docs, so the repo stays the source of truth and the task says
+  where to look.
+- **Library** (`GET /library`): every hub document and linked repo file or
+  page you can see, searchable, with shared repo files listed once. Agents
+  read it before writing a new plan.
+
 ## Agents
 
 1. A person creates a token on **Settings** (browser login only, so a leaked
@@ -321,6 +362,17 @@ POST   /tasks/{id}/criteria         add an acceptance criterion
 PATCH  /tasks/{id}/criteria/{n}     met (evidence required), dropped, open
 POST   /tasks/{id}/git              link a branch, PR or commit (upserts)
 PATCH  /tasks/{id}/deploy           none, staging, production + note
+POST   /tasks/triage                lead: move many proposals at once
+GET    /tasks/{id}/docs             documents on a task
+POST   /tasks/{id}/docs             new document (Markdown)
+GET    /tasks/{id}/docs/{slug}      read (?version=n); /raw for the text alone
+PUT    /tasks/{id}/docs/{slug}      save a new version (base_version required)
+GET    /tasks/{id}/docs/{slug}/history | /diff?from=&to= | POST /restore/{n}
+POST   /tasks/{id}/files            upload (multipart field "upload")
+GET    /tasks/{id}/files/{fid}      download; DELETE to remove
+POST   /tasks/{id}/context          link a repo file or page; DELETE to remove
+GET    /library                     documents and linked files, ?q ?repo ?kind
+POST   /users/{id}/tokens           admin: issue a bot token
 
 GET    /kpi/team   /kpi/me   /kpi/programmer/{id}
 GET    /health
@@ -363,7 +415,7 @@ frontend/
 
 ### Client routes vs API paths
 
-The client routes are `/login`, `/board`, `/inbox`, `/metrics`, `/people` and `/settings`. None of them
+The client routes are `/login`, `/board`, `/inbox`, `/documents`, `/metrics`, `/people` and `/settings`. None of them
 may share a prefix with an API path (`/auth`, `/tasks`, `/users`, `/kpi`,
 `/health`), because the Vite dev proxy matches by prefix: a client route named
 after an API prefix gets handed to the backend on any hard page load — a
