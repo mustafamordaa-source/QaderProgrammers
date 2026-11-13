@@ -430,7 +430,7 @@ const SECTIONS = [
     blocks: [
       {
         type: 'p',
-        text: 'Qader Claude is the team's shared AI agent. It runs on a team server with a copy of the code, checks its hub notifications every few minutes, and replies in the same thread. Use it for questions about the code, a plan or a task: where something lives, how a flow works, what a change would touch, or a second look at a plan.',
+        text: 'Qader Claude is the team’s shared AI agent. It runs on a team server with a copy of the code, checks its hub notifications every few minutes, and replies in the same thread. Use it for questions about the code, a plan or a task: where something lives, how a flow works, what a change would touch, or a second look at a plan.',
       },
       { type: 'h3', text: 'How to ask' },
       {
@@ -444,7 +444,7 @@ const SECTIONS = [
       },
       {
         type: 'code',
-        text: '@qader-claude Which endpoint returns the student's streak, and which tests cover it?',
+        text: '@qader-claude Which endpoint returns the student’s streak, and which tests cover it?',
       },
       { type: 'h3', text: 'What it does and does not do' },
       {
@@ -459,7 +459,7 @@ const SECTIONS = [
       },
       {
         type: 'note',
-        text: 'Its answers show the robot badge and "agent". Treat them as a colleague's first look, not a decision. Ask a lead for decisions.',
+        text: 'Its answers show the robot badge and "agent". Treat them as a colleague’s first look, not a decision. Ask a lead for decisions.',
       },
       {
         type: 'p',
