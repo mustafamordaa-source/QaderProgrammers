@@ -231,6 +231,7 @@ def _ref(task: Task) -> TaskRef:
     """A subtask line for the parent's roster: side, people, claim, status."""
     ref = TaskRef.model_validate(task)
     ref.assignees = [u.handle or u.name for u in (task.assignee_1, task.assignee_2) if u]
+    ref.blocked_by = task.open_blockers()
     if task.claim_is_live(utcnow()) and task.claimer:
         holder = task.claimer.handle or task.claimer.name
         ref.claim_holder = f"{holder} (agent {task.claim_agent})" if task.claim_agent else holder
@@ -1276,7 +1277,6 @@ def claim_task(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Only to_do or in_progress tasks can be claimed (task is '{task.status.value}')",
         )
-    _refuse_if_blocked(task)
     if not user.is_lead and user.id not in task.assignee_ids and not task.pool:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1290,6 +1290,7 @@ def claim_task(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"This pool task is {SIDE_LABELS[task.side.value]} work; your profile lists {', '.join(user.sides)}",
         )
+    _refuse_if_blocked(task)
 
     agent = auth.agent if auth.kind is ActorKind.agent else (payload.agent or "").strip() or None
     now = utcnow()

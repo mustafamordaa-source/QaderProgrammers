@@ -346,3 +346,17 @@ def test_list_filters_pool_parts_for_my_sides(client, auth, leader, alice, db_se
     client.post(f"/tasks/{p['id']}/split", headers=h, json={"parts": [{"side": "fe"}, {"side": "be"}]})
     rows = client.get("/tasks?pool=true&my_sides=true&status_filter=to_do", headers=auth(alice)).json()
     assert [r["side"] for r in rows] == ["fe"]
+
+
+def test_roster_shows_blockers_and_side_is_checked_before_blocking(client, auth, leader, alice, db_session):
+    alice.sides = ["fe"]
+    db_session.commit()
+    h = auth(leader)
+    p = client.post("/tasks", headers=h, json={"title": "P"}).json()
+    out = client.post(f"/tasks/{p['id']}/split", headers=h, json={
+        "parts": [{"side": "be"}, {"side": "content"}], "order": [{"before": "be", "after": "content"}]}).json()
+    roster = {c["side"]: c for c in out["children"]}
+    assert roster["content"]["blocked_by"] == [roster["be"]["id"]]
+    # Wrong side and blocked: the side answer comes first.
+    r = client.post(f"/tasks/{roster['content']['id']}/claim", headers=auth(alice), json={})
+    assert r.status_code == 403 and "Content" in r.json()["detail"]

@@ -267,6 +267,7 @@ class TaskRef(ORMModel):
     assignees: list[str] = []
     claim_holder: str | None = None
     pool: bool = False
+    blocked_by: list[int] = []
 
 
 class SplitPart(BaseModel):
