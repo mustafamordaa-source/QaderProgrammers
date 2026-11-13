@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
@@ -363,6 +363,7 @@ def _create_auth(auth: AuthCtx) -> Auth:
 def create_task(
     payload: TaskCreate,
     db: DbSession,
+    response: Response,
     auth: Auth = Depends(_create_auth),
 ) -> TaskDetailOut:
     user = auth.user
@@ -412,6 +413,7 @@ def create_task(
                                     detail="An open task already tracks this fingerprint")
             out = _detail(_get_task_or_404(db, existing.id))
             out.duplicate_of_existing = True
+            response.status_code = status.HTTP_200_OK  # nothing new was created
             return out
         recent = db.scalar(
             select(Task).where(

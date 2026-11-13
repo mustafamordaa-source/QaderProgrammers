@@ -49,7 +49,7 @@ class TestFingerprint:
         body = {"title": "N+1 on students list", "fingerprint": "n-plus-one:students/views.py:list"}
         first = client.post("/tasks", headers=auth(leader), json=body).json()
         again = client.post("/tasks", headers=auth(leader), json=body)
-        assert again.status_code == 201
+        assert again.status_code == 200
         assert again.json()["id"] == first["id"] and again.json()["duplicate_of_existing"] is True
         assert again.json()["events"][-1]["event_type"] == "seen_again"
 
