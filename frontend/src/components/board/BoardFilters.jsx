@@ -73,7 +73,7 @@ export default function BoardFilters({
       <input
         type="search"
         aria-label="Search title, description and summary"
-        placeholder="Search tasks…"
+        placeholder="Search, or HUB-12…"
         dir="auto"
         value={search}
         onChange={(event) => set.search(event.target.value)}

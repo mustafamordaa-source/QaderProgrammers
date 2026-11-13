@@ -228,6 +228,11 @@ const SECTIONS = [
     id: 'working',
     title: 'Working on a task',
     blocks: [
+      { type: 'h3', text: 'Share a task' },
+      {
+        type: 'p',
+        text: 'Every task has a key such as HUB-12, shown on its card and in its title. Open a task and click Copy link: the link (`/tasks/12`) opens that task for whoever you send it to, after they sign in. The address bar also holds `?task=12` while a task is open. Search finds a task by its key: type `HUB-12`, `#12` or `12`.',
+      },
       { type: 'h3', text: 'Claim and lease' },
       {
         type: 'list',

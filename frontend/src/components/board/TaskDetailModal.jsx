@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Modal from '../Modal'
 import { api, isVersionConflict } from '../../api/client'
@@ -18,6 +18,8 @@ import {
   isClosed,
   isReadOnlyUser,
   isWorkerOn,
+  taskKey,
+  taskLink,
 } from '../../lib/constants'
 import { isOverdue } from '../../lib/format'
 import CreateTaskModal from './CreateTaskModal'
@@ -57,6 +59,42 @@ const CONFLICT_MESSAGE =
  * other tasks this view changed or created (a new subtask, a task it now
  * blocks), so a board can keep their cards current.
  */
+/** Copy a link that opens this task, or its HUB- key, to share with the team. */
+function CopyTaskLink({ id }) {
+  const [copied, setCopied] = useState(null)
+  useEffect(() => {
+    if (!copied) return undefined
+    const timer = setTimeout(() => setCopied(null), 2000)
+    return () => clearTimeout(timer)
+  }, [copied])
+
+  async function copy(what, text) {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(what)
+    } catch {
+      // Clipboard refused (an http page or a browser setting): show the text to copy by hand.
+      window.prompt('Copy this:', text)
+    }
+  }
+
+  const button =
+    'rounded-md border border-hairline px-2 py-1 text-xs text-ink-secondary hover:bg-surface-raised hover:text-ink'
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-2">
+      <button type="button" className={button} onClick={() => copy('link', taskLink(id))}>
+        {copied === 'link' ? 'Link copied' : 'Copy link'}
+      </button>
+      <button type="button" className={button} onClick={() => copy('key', taskKey(id))}>
+        {copied === 'key' ? 'Copied' : `Copy ${taskKey(id)}`}
+      </button>
+      <span role="status" className="sr-only">
+        {copied ? 'Copied to the clipboard' : ''}
+      </span>
+    </div>
+  )
+}
+
 export default function TaskDetailModal({
   task,
   user,
@@ -180,14 +218,15 @@ export default function TaskDetailModal({
   }
 
   return (
-    <Modal title={`Task #${task.id}`} onClose={onClose} size="xl">
+    <Modal title={`Task ${taskKey(task.id)}`} onClose={onClose} size="xl">
+      <CopyTaskLink id={task.id} />
       {task.parent_id && (
         <button
           type="button"
           onClick={() => openTask(task.parent_id)}
           className="mb-1 inline-flex max-w-full items-center gap-1 text-xs text-ink-secondary underline-offset-2 hover:text-ink hover:underline"
         >
-          ↳ Subtask of #{task.parent_id}
+          ↳ Subtask of {taskKey(task.parent_id)}
           {task.parent?.title && (
             <span dir="auto" className="truncate">
               {task.parent.title}

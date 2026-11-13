@@ -555,3 +555,20 @@ export function splitList(text) {
   }
   return out
 }
+
+/** The ID people and agents use for a task: HUB-12 (branches, the CLI, links). */
+export function taskKey(id) {
+  return `HUB-${id}`
+}
+
+/** Read a task ID from "12", "#12", "HUB-12" or "hub12"; null when it is not one. */
+export function parseTaskRef(value) {
+  const match = /^(?:hub[-\s]?|#)?(\d{1,9})$/i.exec(String(value ?? '').trim())
+  const id = match ? Number(match[1]) : NaN
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+/** A link that opens the task's dialog on the board, for sharing. */
+export function taskLink(id) {
+  return `${window.location.origin}/tasks/${id}`
+}
