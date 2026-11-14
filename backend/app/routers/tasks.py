@@ -934,6 +934,8 @@ def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> 
             restricted=item.restricted, pool=False, created_kind=auth.kind, created_agent=auth.agent,
             kind=item.kind, fingerprint=fingerprint, area_id=area.id if area else None,
         )
+        if item.points is not None:
+            task.points = item.points
         db.add(task)
         db.flush()
         for n, text in enumerate(criteria, start=1):
@@ -949,8 +951,8 @@ def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> 
     wanted: dict[str, object] = {"title": title}
     if "description" in sent:
         wanted["description"] = description
-    for field in ("kind", "priority", "side", "restricted"):
-        if field in sent:
+    for field in ("kind", "priority", "side", "restricted", "points"):
+        if field in sent and getattr(item, field) is not None:
             wanted[field] = getattr(item, field)
     if "tags" in sent:
         wanted["tags"] = item.tags or []

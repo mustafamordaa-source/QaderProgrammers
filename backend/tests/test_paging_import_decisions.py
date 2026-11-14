@@ -382,3 +382,18 @@ class TestAwaitingDecision:
             _task("QX-0001", question="Phase 0 or later?", question_to="lead")]})
         rows = client.get("/tasks?awaiting_decision=true", headers=h).json()
         assert [q["text"] for t in rows for q in t["decision_questions"]] == ["Phase 0 or later?", "Decide for lead?"]
+
+
+def test_import_sets_points_and_rejects_off_scale(client, auth, leader):
+    h = auth(leader)
+    r = client.post("/tasks/import", headers=h, json={"tasks": [
+        {"external_key": "PTS-1", "title": "Pointed task", "points": 8},
+        {"external_key": "PTS-2", "title": "Bad points", "points": 4},
+    ]})
+    rows = {x["external_key"]: x for x in r.json()}
+    assert rows["PTS-1"]["action"] == "created"
+    assert rows["PTS-2"]["action"] == "error"
+    assert client.get(f"/tasks/{rows['PTS-1']['id']}", headers=h).json()["points"] == 8
+    r = client.post("/tasks/import", headers=h, json={"tasks": [{"external_key": "PTS-1", "title": "Pointed task", "points": 5}]})
+    assert r.json()[0]["action"] == "updated"
+    assert client.get(f"/tasks/{rows['PTS-1']['id']}", headers=h).json()["points"] == 5

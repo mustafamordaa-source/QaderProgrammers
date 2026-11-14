@@ -614,6 +614,8 @@ class ImportTask(BaseModel):
     area: str | None = Field(default=None, max_length=60)
     tags: list[str] = Field(default_factory=list)
     criteria: list[str] = Field(default_factory=list, max_length=30)
+    # Effort on the hub's scale (1, 2, 3, 5, 8, 13); left out, new tasks get the default.
+    points: int | None = None
     restricted: bool = False
     # Used on create only; a later import never moves the task.
     status: TaskStatus = TaskStatus.backlog
@@ -660,6 +662,7 @@ class ImportTask(BaseModel):
             raise ValueError("question_to needs question: the text to ask")
         return self
 
+    _check_points = field_validator("points")(staticmethod(_validate_points))
 
 class ImportRequest(BaseModel):
     # Validate and report without writing anything.
