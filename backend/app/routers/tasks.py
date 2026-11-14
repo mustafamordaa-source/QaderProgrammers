@@ -78,8 +78,13 @@ from app.schemas import (
     TaskUpdate,
 )
 from app.notify import by_handles, leads, mentioned_handles, notify
-from app.models import LinkKind, Notification, NotifyKind, TaskKind, TaskLink
+from app.models import Area, LinkKind, Notification, NotifyKind, TaskKind, TaskLink
 from app import templates
+from app.routers.areas import (
+    area_and_children_ids, clear_pick, find_similar, resolve_area, similar_tasks, suggest_areas,
+)
+from app.schemas import SimilarOut, SimilarRequest
+from app.similarity import DUPLICATE, RELATED, Doc
 from app.transitions import PARKABLE, PARKING, TransitionError, check_rejection, check_transition
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -399,6 +404,17 @@ def _create_auth(auth: AuthCtx) -> Auth:
     return auth
 
 
+@router.post("/similar", response_model=SimilarOut)
+def similar(
+    payload: SimilarRequest,
+    db: DbSession,
+    auth: Auth = Depends(require_scope("tasks:read")),
+) -> SimilarOut:
+    """Tasks that look like this text (open, done or dropped), best first, with a
+    0-100 score and band, plus the areas the text fits. Nothing is written."""
+    return similar_tasks(payload, db, auth)
+
+
 @router.post("", response_model=TaskDetailOut, status_code=status.HTTP_201_CREATED)
 def create_task(
     payload: TaskCreate,
@@ -472,6 +488,36 @@ def create_task(
                 ),
             )
 
+    area = resolve_area(db, payload.area) if payload.area else None
+    exclude: set[int] = set()
+    if payload.parent_id is not None:
+        # A subtask is meant to resemble its parent and its siblings.
+        exclude = {payload.parent_id} | set(db.scalars(select(Task.id).where(Task.parent_id == payload.parent_id)))
+    similar_out = SimilarOut()
+    if payload.check_similar:
+        similar_out = find_similar(
+            db, user, title=payload.title, description=payload.description, criteria=payload.criteria,
+            area_id=area.id if area else None, exclude_ids=exclude, limit=5,
+        )
+        dup = next((m for m in similar_out.matches if m.score >= DUPLICATE), None)
+        if dup is not None and not (payload.duplicate_reason or "").strip():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+                "message": (
+                    f"This looks like task {dup.id} ({dup.score}% alike, {dup.status.value}): {dup.title}. "
+                    "Add to that task instead, or send duplicate_reason saying how this one differs."
+                ),
+                "similar": [m.model_dump(mode="json") for m in similar_out.matches],
+            })
+    elif payload.auto_area and area is None:
+        query = Doc(0, payload.title, "\n".join([payload.description or ""] + list(payload.criteria)))
+        similar_out = SimilarOut(suggested_areas=suggest_areas(db, query, [], {}))
+    area_auto = False
+    if area is None and payload.auto_area:
+        pick = clear_pick(similar_out.suggested_areas)
+        if pick is not None:
+            area = db.get(Area, pick.area.id)
+            area_auto = True
+
     if propose_only:
         start = S.proposed
     elif is_leader:
@@ -499,6 +545,7 @@ def create_task(
         kind=payload.kind,
         parent_id=payload.parent_id,
         fingerprint=payload.fingerprint,
+        area_id=area.id if area else None,
     )
     db.add(task)
     db.flush()  # assign task.id before logging the event
@@ -509,6 +556,14 @@ def create_task(
     for n, text in enumerate(criteria, start=1):
         db.add(Criterion(task_id=task.id, n=n, text=lint.clean(text, field=f"criterion {n}")))
 
+    related = [m for m in similar_out.matches if m.score >= RELATED][:3]
+    created_data = {}
+    if related:
+        created_data["similar"] = [{"id": m.id, "score": m.score} for m in related]
+    if (payload.duplicate_reason or "").strip() and any(m.score >= DUPLICATE for m in related):
+        created_data["duplicate_reason"] = lint.clean(payload.duplicate_reason, field="duplicate_reason")
+    if area_auto:
+        created_data["area_auto"] = area.slug
     record(
         db,
         auth,
@@ -516,7 +571,13 @@ def create_task(
         event_type=EventType.created,
         to_status=start,
         timestamp=task.created_at,
+        data=created_data or None,
     )
+    for m in related:
+        db.add(TaskLink(from_task_id=task.id, to_task_id=m.id, kind=LinkKind.relates,
+                        created_by=user.id, actor_kind=auth.kind, created_at=utcnow()))
+        record(db, auth, task_id=m.id, event_type=EventType.linked,
+               data={"kind": LinkKind.relates.value, "from": task.id, "score": m.score})
     db.flush()
     if start is S.proposed:
         notify(db, auth, users=leads(db), task=task, kind=NotifyKind.proposal, text=task.title)
@@ -526,7 +587,11 @@ def create_task(
     notify(db, auth, users=by_handles(db, mentioned_handles(task.description)), task=task,
            kind=NotifyKind.mention, text=task.description)
     db.commit()
-    return _detail(_get_task_or_404(db, task.id))
+    out = _detail(_get_task_or_404(db, task.id))
+    out.similar = similar_out.matches
+    out.suggested_areas = similar_out.suggested_areas
+    out.area_auto = area_auto
+    return out
 
 
 @router.get("", response_model=list[TaskOut])
@@ -548,6 +613,7 @@ def list_tasks(
     parent_id: int | None = None,
     pool: bool | None = None,
     my_sides: bool = Query(default=False, description="Only tasks on a side in your Works on"),
+    area: str | None = Query(default=None, max_length=60, description="Area slug; includes its sub-areas"),
     limit: int = Query(default=500, ge=1, le=1000),
 ) -> list[TaskOut]:
     if not auth.has("tasks:read"):
@@ -598,6 +664,8 @@ def list_tasks(
         stmt = stmt.where(Task.pool.is_(pool))
     if my_sides:
         stmt = stmt.where(Task.side.in_(list(user.sides or [])))
+    if area:
+        stmt = stmt.where(Task.area_id.in_(area_and_children_ids(db, resolve_area(db, area))))
     if q:
         like = f"%{q.strip()}%"
         found = [Task.title.ilike(like), Task.description.ilike(like), Task.summary.ilike(like)]
@@ -784,6 +852,7 @@ def split_task(
             side=part.side,
             tags=list(parent.tags or []),
             areas=list(parent.areas or []),
+            area_id=parent.area_id,
             restricted=parent.restricted,
             pool=part.assignee_id is None,
             created_kind=auth.kind,
@@ -1024,7 +1093,7 @@ def task_events(
 
 # --- edit / assign / status ---------------------------------------------------
 
-_WORKER_FIELDS = {"summary", "tags", "areas", "side"}
+_WORKER_FIELDS = {"summary", "tags", "areas", "side", "area"}
 _LINTED = {"title", "description", "summary"}
 
 
@@ -1059,6 +1128,12 @@ def update_task(
             _check_parent(db, task.id, new_parent, user)
 
     changes: dict[str, list] = {}
+    if "area" in fields:
+        ref = fields.pop("area")
+        new_area = resolve_area(db, ref) if ref else None
+        if (new_area.id if new_area else None) != task.area_id:
+            changes["area"] = [task.area.slug if task.area else None, new_area.slug if new_area else None]
+            task.area_id = new_area.id if new_area else None
     for field, value in fields.items():
         if field in _LINTED:
             value = lint.clean(value, field=field)

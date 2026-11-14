@@ -312,7 +312,7 @@ class TestSplit:
 
         second_lead = make_user(db_session, "Lead Two", "lead2@example.com", Role.leader)
         # Reopen nothing; the second lead was not there yet, so close a fresh family.
-        p2 = client.post("/tasks", headers=h, json={"title": "Feature 2"}).json()
+        p2 = client.post("/tasks", headers=h, json={"title": "Reports page redesign"}).json()
         kid = client.post(f"/tasks/{p2['id']}/split", headers=h,
                           json={"parts": [{"side": "be", "assignee_id": alice.id}]}).json()["children"][0]["id"]
         client.patch(f"/tasks/{kid}/status", headers=auth(alice), json={"status": "in_progress"})

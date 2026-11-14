@@ -146,7 +146,7 @@ class TestEmail:
         bob.email_notifications = False
         db_session.commit()
         for who in (alice, bob):
-            client.post("/tasks", headers=auth(leader), json={"title": "x", "assignee_1_id": who.id})
+            client.post("/tasks", headers=auth(leader), json={"title": f"Task for {who.name}", "assignee_1_id": who.id})
         assert [r.email_state for r in _rows(db_session, alice)] == ["skipped"]
         assert [r.email_state for r in _rows(db_session, bob)] == ["skipped"]
         assert _send(db_session) == 0

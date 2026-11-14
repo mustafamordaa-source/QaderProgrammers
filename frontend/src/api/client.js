@@ -16,16 +16,20 @@ export function setToken(token) {
 }
 
 export class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, detail = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    // The raw `detail` when the server sent an object (for example the similar
+    // tasks behind a duplicate refusal, or area suggestions).
+    this.detail = detail
   }
 }
 
 function readDetail(body, fallback) {
   const detail = body?.detail
   if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object' && !Array.isArray(detail) && detail.message) return detail.message
   // FastAPI validation errors arrive as a list of {loc, msg} objects.
   if (Array.isArray(detail) && detail.length > 0) {
     return detail
@@ -73,9 +77,11 @@ async function request(path, { method = 'GET', body, params, form, as = 'json' }
   }
 
   if (!response.ok) {
+    const detail = payload?.detail
     throw new ApiError(
       readDetail(payload, `Request failed (${response.status})`),
       response.status,
+      detail && typeof detail === 'object' && !Array.isArray(detail) ? detail : null,
     )
   }
   return payload
@@ -107,8 +113,20 @@ export const api = {
   task: (id) => request(`/tasks/${id}`),
   // Skeleton, required headings and starter criteria per task kind.
   templates: () => request('/tasks/templates'),
-  // The answer has `duplicate_of_existing: true` when a fingerprint matched an open task.
+  // The answer has `duplicate_of_existing: true` when a fingerprint matched an open task,
+  // and `similar` / `suggested_areas` / `area_auto` from the duplicate check. A 409 whose
+  // err.detail.similar is set means "looks like a duplicate": resend with duplicate_reason.
   createTask: (payload) => request('/tasks', { method: 'POST', body: payload }),
+  // Tasks that look like this text, and the areas it fits. Writes nothing.
+  similarTasks: (payload) => request('/tasks/similar', { method: 'POST', body: payload }),
+
+  // Product areas: an open list; adding a name close to an existing one is refused
+  // (409, err.detail.suggestions) unless confirm_new is true.
+  areas: (q) => request('/areas', { params: { q } }),
+  createArea: (payload) => request('/areas', { method: 'POST', body: payload }),
+  updateArea: (slug, payload) => request(`/areas/${encodeURIComponent(slug)}`, { method: 'PATCH', body: payload }),
+  mergeArea: (slug, into) =>
+    request(`/areas/${encodeURIComponent(slug)}/merge`, { method: 'POST', body: { into } }),
   addTaskLink: (id, kind, toTaskId) =>
     request(`/tasks/${id}/links`, { method: 'POST', body: { kind, to_task_id: toTaskId } }),
   removeTaskLink: (id, linkId) => request(`/tasks/${id}/links/${linkId}`, { method: 'DELETE' }),

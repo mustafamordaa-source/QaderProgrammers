@@ -27,6 +27,9 @@ export default function AppShell() {
               <NavLink to="/board" className={navClass}>
                 Board
               </NavLink>
+              <NavLink to="/area-list" className={navClass}>
+                Areas
+              </NavLink>
               <NavLink to="/inbox" className={navClass}>
                 Inbox
               </NavLink>

@@ -16,6 +16,7 @@ export default defineConfig({
     proxy: {
       '/auth': 'http://127.0.0.1:8000',
       '/tasks': 'http://127.0.0.1:8000',
+      '/areas': 'http://127.0.0.1:8000',
       '/users': 'http://127.0.0.1:8000',
       '/kpi': 'http://127.0.0.1:8000',
       '/library': 'http://127.0.0.1:8000',

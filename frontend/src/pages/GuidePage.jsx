@@ -168,6 +168,37 @@ const SECTIONS = [
     id: 'writing',
     title: 'Writing a good task',
     blocks: [
+      { type: 'h3', text: 'Areas: where a task belongs' },
+      {
+        type: 'p',
+        text: 'Every task can have one area, such as Payments or Exams. Pick it in the Area field: search by name, slug or another word people use for it. Left empty, the hub picks the area itself when the text clearly fits one. The Areas page lists them all with their open tasks; click one to see its board.',
+      },
+      {
+        type: 'list',
+        items: [
+          'Reuse an area before you add one. The hub refuses a new name close to an existing area or alias and shows the close ones. Add it anyway only when yours is different.',
+          'Leads rename areas, add aliases (in Arabic too), set a parent, and merge two areas. A merge moves every task and keeps the old name as an alias.',
+          'Code paths (the folders a task touches) are a separate field.',
+        ],
+      },
+      { type: 'h3', text: 'The duplicate check' },
+      {
+        type: 'p',
+        text: 'While you write a new task, the hub shows tasks that look like it, open, done or dropped, with a score from 0 to 100. It compares titles, descriptions and acceptance criteria, and it reads Arabic spelling variants as the same word. Tasks in the same area rank first; a match in another area says so.',
+      },
+      {
+        type: 'table',
+        head: ['Score', 'What happens'],
+        rows: [
+          ['90 or more', 'The hub refuses the new task. Add to the existing one, or say how yours differs and create it anyway; it gets linked.'],
+          ['75 to 89', 'The task is created and linked (relates) to the close ones.'],
+          ['50 to 74', 'Shown as similar, for your information.'],
+        ],
+      },
+      {
+        type: 'code',
+        text: 'qhub similar "CSV export for weekly reports"\nqhub areas\nqhub add "Wallet top-up limit" --area payments',
+      },
       { type: 'h3', text: 'Kinds and templates' },
       {
         type: 'p',

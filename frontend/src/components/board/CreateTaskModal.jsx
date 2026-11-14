@@ -1,5 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Modal from '../Modal'
+import { api } from '../../api/client'
+import AreaPicker from './AreaPicker'
+import SimilarTasks from './SimilarTasks'
 import PointsPicker from './PointsPicker'
 import TaskPicker from './TaskPicker'
 import { loadTemplates } from './taskTemplates'
@@ -50,6 +53,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
     side: preset?.side ?? '',
     tags: (preset?.tags ?? []).join(', '),
     areas: '',
+    area: preset?.area ?? '',
     criteria: '',
     status: 'to_do',
     restricted: false,
@@ -65,6 +69,42 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
   const [error, setError] = useState(null)
   const [descriptionError, setDescriptionError] = useState(null)
   const [saving, setSaving] = useState(false)
+  // The duplicate check: matches while typing, and the area the text fits.
+  const [similar, setSimilar] = useState({ matches: [], suggested_areas: [] })
+  const [checking, setChecking] = useState(false)
+  // Set when the hub refused the task as a duplicate: { message, similar }.
+  const [duplicate, setDuplicate] = useState(null)
+  const [duplicateReason, setDuplicateReason] = useState('')
+  const checkId = useRef(0)
+
+  // Ask the hub for similar tasks once typing pauses. Nothing is written.
+  useEffect(() => {
+    const title = form.title.trim()
+    if (title.length < 4) {
+      setSimilar({ matches: [], suggested_areas: [] })
+      return undefined
+    }
+    const id = ++checkId.current
+    const timer = setTimeout(async () => {
+      setChecking(true)
+      try {
+        const out = await api.similarTasks({
+          title,
+          description: form.description.trim() || null,
+          criteria: form.criteria.split('\n').map((l) => l.trim()).filter(Boolean),
+          area: form.area || null,
+          parent_id: parent?.id ?? null,
+          limit: 5,
+        })
+        if (id === checkId.current) setSimilar(out)
+      } catch {
+        // The check is a helper; the create still runs it server side.
+      } finally {
+        if (id === checkId.current) setChecking(false)
+      }
+    }, 700)
+    return () => clearTimeout(timer)
+  }, [form.title, form.description, form.criteria, form.area, parent])
 
   useEffect(() => {
     let cancelled = false
@@ -122,6 +162,8 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
       kind: form.kind,
       use_template: form.use_template,
       parent_id: parent?.id ?? null,
+      area: form.area || null,
+      ...(duplicate && duplicateReason.trim() ? { duplicate_reason: duplicateReason.trim() } : {}),
     }
     if (isLead) {
       Object.assign(payload, {
@@ -139,6 +181,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
       onClose()
     } catch (err) {
       if (err.status === 422 && MISSING_HEADINGS.test(err.message)) setDescriptionError(err.message)
+      else if (err.status === 409 && err.detail?.similar) setDuplicate({ message: err.message, similar: err.detail.similar })
       else setError(err.message)
     } finally {
       setSaving(false)
@@ -264,6 +307,24 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
           </p>
         )}
 
+        <SimilarTasks
+          matches={similar.matches}
+          loading={checking}
+          title="Similar tasks (check before you create a copy)"
+        />
+
+        <div className="mt-4">
+          <label className="block text-sm font-medium" htmlFor="area">
+            Area <span className="font-normal text-ink-muted">(product area; left empty, the hub picks one when the fit is clear)</span>
+          </label>
+          <AreaPicker
+            id="area"
+            value={form.area}
+            onChange={(slug) => update('area', slug)}
+            suggestion={similar.suggested_areas?.[0] ?? null}
+          />
+        </div>
+
         <div className="mt-4">
           <label className="block text-sm font-medium" htmlFor="parent">
             Subtask of <span className="font-normal text-ink-muted">(optional)</span>
@@ -349,7 +410,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
           </div>
           <div>
             <label className="block text-sm font-medium" htmlFor="areas">
-              Areas <span className="font-normal text-ink-muted">(one path per line)</span>
+              Code paths <span className="font-normal text-ink-muted">(one per line)</span>
             </label>
             <textarea
               id="areas"
@@ -524,6 +585,29 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
           </>
         )}
 
+        {duplicate && (
+          <div role="alert" className="mt-4 rounded-lg border border-critical/50 px-3 py-2">
+            <p dir="auto" className="text-sm text-critical">{duplicate.message}</p>
+            <SimilarTasks matches={duplicate.similar} title="The hub found" />
+            <label className="mt-2 block text-sm font-medium" htmlFor="duplicate_reason">
+              How is yours different?
+            </label>
+            <textarea
+              id="duplicate_reason"
+              rows={2}
+              dir="auto"
+              maxLength={500}
+              value={duplicateReason}
+              onChange={(event) => setDuplicateReason(event.target.value)}
+              placeholder="For example: same screen, but this one is the parents' report"
+              className={inputClass}
+            />
+            <p className="mt-1 text-xs text-ink-muted">
+              With a reason, Create task files it and links it to the task above. Otherwise, open that task and add to it.
+            </p>
+          </div>
+        )}
+
         {error && (
           <p role="alert" dir="auto" className="mt-4 text-sm text-critical">
             {error}
@@ -540,10 +624,10 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
           </button>
           <button
             type="submit"
-            disabled={saving}
+            disabled={saving || (duplicate && !duplicateReason.trim())}
             className="rounded-lg bg-series1 px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60"
           >
-            {saving ? 'Creating…' : 'Create task'}
+            {saving ? 'Creating…' : duplicate ? 'Create anyway' : 'Create task'}
           </button>
         </div>
       </form>

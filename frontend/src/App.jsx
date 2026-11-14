@@ -10,6 +10,7 @@ import InboxPage from './pages/InboxPage'
 import SettingsPage from './pages/SettingsPage'
 import DocumentsPage from './pages/DocumentsPage'
 import GuidePage from './pages/GuidePage'
+import AreasPage from './pages/AreasPage'
 import { parseTaskRef } from './lib/constants'
 
 /** /t/12 or /t/HUB-12 (short link; /tasks is an API prefix): open that task's dialog on the board. */
@@ -46,6 +47,7 @@ export default function App() {
           />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/guide" element={<GuidePage />} />
+          <Route path="/area-list" element={<AreasPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/board" replace />} />
       </Routes>

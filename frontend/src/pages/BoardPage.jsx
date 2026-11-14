@@ -45,6 +45,8 @@ export default function BoardPage() {
   const [tagInput, setTagInput] = useState('')
   const [search, setSearch] = useState('')
   const [kind, setKind] = useState('')
+  // `/board?area=payments` opens the board on one area (the Areas page links here).
+  const [area, setArea] = useState(() => new URLSearchParams(window.location.search).get('area') ?? '')
   const [openParts, setOpenParts] = useState(false)
   const mySides = user?.sides ?? []
   // Leads: show only what agents filed, and tick Triage cards for bulk triage.
@@ -66,6 +68,7 @@ export default function BoardPage() {
         tag,
         q,
         kind,
+        area,
         created_kind: fromAgents ? 'agent' : undefined,
         // Pool parts waiting in To do on a side in the user's "Works on".
         ...(openParts ? { pool: true, my_sides: true, status_filter: 'to_do' } : {}),
@@ -81,7 +84,7 @@ export default function BoardPage() {
         setRefreshing(false)
       }
     }
-  }, [mine, side, tag, q, kind, openParts, fromAgents])
+  }, [mine, side, tag, q, kind, area, openParts, fromAgents])
 
   useEffect(() => {
     load()
@@ -281,7 +284,7 @@ export default function BoardPage() {
   }
 
   const filtered = mine || side || tag || q || kind || openParts || fromAgents
-  const activeCount = [mine, side, tagInput.trim(), search.trim(), kind, openParts, fromAgents].filter(Boolean).length
+  const activeCount = [mine, side, tagInput.trim(), search.trim(), kind, area, openParts, fromAgents].filter(Boolean).length
   const programmers = assignablePeople(people)
 
   const prefs = useBoardPrefs()
@@ -297,6 +300,7 @@ export default function BoardPage() {
     setTagInput('')
     setSearch('')
     setKind('')
+    setArea('')
     setOpenParts(false)
     setFromAgents(false)
   }
@@ -329,8 +333,8 @@ export default function BoardPage() {
       </div>
 
       <BoardFilters
-        values={{ search, mine, side, tagInput, kind, fromAgents, openParts }}
-        set={{ search: setSearch, mine: setMine, side: setSide, tagInput: setTagInput, kind: setKind, fromAgents: setFromAgents, openParts: setOpenParts }}
+        values={{ search, mine, side, tagInput, kind, fromAgents, openParts, area }}
+        set={{ search: setSearch, mine: setMine, side: setSide, tagInput: setTagInput, kind: setKind, fromAgents: setFromAgents, openParts: setOpenParts, area: setArea }}
         onClear={clearFilters}
         activeCount={activeCount}
         resultCount={tasks.length}
