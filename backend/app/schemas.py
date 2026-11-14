@@ -326,6 +326,108 @@ class TemplateOut(BaseModel):
     criteria: list[str]
 
 
+AREA_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,58}$")
+
+
+class AreaBrief(ORMModel):
+    id: int
+    slug: str
+    name: str
+
+
+class AreaOut(AreaBrief):
+    description: str | None = None
+    aliases: list[str] = []
+    parent: str | None = None  # parent slug
+    merged_into: str | None = None
+    created_at: datetime
+    open_count: int = 0
+    total_count: int = 0
+
+
+def _clean_aliases(v):
+    if v is None:
+        return v
+    out = []
+    for a in v:
+        a = " ".join((a or "").split())
+        if not a:
+            continue
+        if len(a) > 60:
+            raise ValueError("an alias is at most 60 characters")
+        if a.lower() not in [x.lower() for x in out]:
+            out.append(a)
+    if len(out) > 15:
+        raise ValueError("at most 15 aliases")
+    return out
+
+
+class AreaCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    # Made from the name when left out; give one when the name is not in Latin letters.
+    slug: str | None = None
+    description: str | None = Field(default=None, max_length=1_000)
+    aliases: list[str] = Field(default_factory=list)
+    parent: str | None = None
+    # The hub refuses a name close to an existing area unless this is true.
+    confirm_new: bool = False
+
+    _aliases = field_validator("aliases")(staticmethod(_clean_aliases))
+
+    @field_validator("slug")
+    @classmethod
+    def _slug(cls, v):
+        if v is not None and not AREA_SLUG_RE.match(v):
+            raise ValueError("slug: lowercase letters, digits and dashes, 2 to 59 characters")
+        return v
+
+
+class AreaUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=120)
+    description: str | None = Field(default=None, max_length=1_000)
+    aliases: list[str] | None = None
+    parent: str | None = None  # slug; "" clears
+
+    _aliases = field_validator("aliases")(staticmethod(_clean_aliases))
+
+
+class AreaMerge(BaseModel):
+    into: str  # slug of the area to keep
+
+
+class AreaSuggestion(BaseModel):
+    area: AreaBrief
+    score: int
+
+
+class SimilarRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=20_000)
+    criteria: list[str] = Field(default_factory=list, max_length=30)
+    area: str | None = None
+    # Leave these out of the comparison (the task itself, its parent).
+    exclude_id: int | None = None
+    parent_id: int | None = None
+    limit: int = Field(default=5, ge=1, le=20)
+
+
+class SimilarMatch(BaseModel):
+    id: int
+    title: str
+    status: TaskStatus
+    kind: TaskKind
+    area: AreaBrief | None = None
+    score: int
+    same_area: bool = False
+    # duplicate (90+), related (75+), similar (50+)
+    band: str
+
+
+class SimilarOut(BaseModel):
+    matches: list[SimilarMatch] = []
+    suggested_areas: list[AreaSuggestion] = []
+
+
 class TaskOut(ORMModel):
     id: int
     title: str
@@ -365,6 +467,7 @@ class TaskOut(ORMModel):
     kind: TaskKind = TaskKind.task
     parent_id: int | None = None
     fingerprint: str | None = None
+    area: AreaBrief | None = None
     # Filled by the router.
     criteria_total: int = 0
     criteria_open: int = 0
@@ -387,6 +490,11 @@ class TaskDetailOut(TaskOut):
     links: list["TaskLinkOut"] = []
     # Set when a create matched an open task by fingerprint.
     duplicate_of_existing: bool = False
+    # Filled on create: tasks that look alike, the areas the text fits, and
+    # whether the hub picked the area itself.
+    similar: list[SimilarMatch] = []
+    suggested_areas: list[AreaSuggestion] = []
+    area_auto: bool = False
 
 
 class ClaimOut(TaskOut):
@@ -412,6 +520,8 @@ class _TaskHubFields(BaseModel):
     summary: str | None = Field(default=None, max_length=4_000)
     restricted: bool | None = None
     pool: bool | None = None
+    # Product area slug (GET /areas lists them); "" clears it.
+    area: str | None = None
 
     @field_validator("tags")
     @classmethod
@@ -443,6 +553,12 @@ class TaskCreate(_TaskHubFields, _AssigneeValidatorMixin):
     use_template: bool = True
     parent_id: int | None = None
     fingerprint: str | None = Field(default=None, max_length=200, pattern=r"^[\w:./@#-]{3,200}$")
+    # Compare with existing tasks first (on by default; off for bulk imports).
+    check_similar: bool = True
+    # Required to create a task that scores 90+ against another: why it differs.
+    duplicate_reason: str | None = Field(default=None, max_length=500)
+    # With no area given, use the best suggestion when it is clear enough.
+    auto_area: bool = True
 
     _check_points = field_validator("points")(staticmethod(_validate_points))
 

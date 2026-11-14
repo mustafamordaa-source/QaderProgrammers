@@ -390,8 +390,12 @@ class Task(Base):
     # Same fingerprint, same problem: creating it again while one is open adds
     # a note to the open task instead (used by scanners).
     fingerprint: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
+    # The product area (payments, exams, ...), from the shared list in `areas_list`.
+    # Not the same as `areas` above, which lists code paths.
+    area_id: Mapped[int | None] = mapped_column(ForeignKey("areas_list.id"), nullable=True, index=True)
 
     creator: Mapped[User] = relationship(foreign_keys=[created_by], lazy="joined")
+    area: Mapped["Area | None"] = relationship(foreign_keys=[area_id], lazy="joined")
     assignee_1: Mapped[User | None] = relationship(foreign_keys=[assignee_1_id], lazy="joined")
     assignee_2: Mapped[User | None] = relationship(foreign_keys=[assignee_2_id], lazy="joined")
     claimer: Mapped[User | None] = relationship(foreign_keys=[claimed_by], lazy="joined")
@@ -785,6 +789,28 @@ class Notification(Base):
     user: Mapped[User] = relationship(foreign_keys=[user_id], lazy="joined")
     actor: Mapped[User | None] = relationship(foreign_keys=[actor_id], lazy="joined")
     task: Mapped[Task] = relationship(lazy="joined")
+
+
+class Area(Base):
+    """A product area tasks belong to. Anyone may add one, after the hub checks
+    for an existing area with a similar name or alias; leads rename and merge.
+    A merged area keeps its row (merged_into_id) so old references resolve."""
+
+    __tablename__ = "areas_list"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(60), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Other words people use for it, in any language.
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("areas_list.id"), nullable=True)
+    merged_into_id: Mapped[int | None] = mapped_column(ForeignKey("areas_list.id"), nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    actor_kind: Mapped[ActorKind] = mapped_column(
+        _str_enum(ActorKind, "area_actor_kind"), default=ActorKind.human, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 
 class TaskLink(Base):

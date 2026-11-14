@@ -14,7 +14,7 @@ from app.config import check_production_settings, settings
 from contextlib import asynccontextmanager
 
 from app import mailer
-from app.routers import auth, docs, github, kpi, notifications, tasks, users
+from app.routers import areas, auth, docs, github, kpi, notifications, tasks, users
 
 # Refuse to start in production with a public or short signing key.
 check_production_settings(settings)
@@ -48,6 +48,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(tasks.router)
+app.include_router(areas.router)
 app.include_router(docs.router)
 app.include_router(notifications.router)
 app.include_router(github.router)

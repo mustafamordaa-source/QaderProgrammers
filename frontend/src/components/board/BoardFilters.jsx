@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import { KIND_LABELS, SIDES, SIDE_LABELS, TASK_KINDS } from '../../lib/constants'
+import { loadAreas } from './AreaPicker'
 
 const control =
   'h-8 rounded-lg border bg-surface-raised px-2.5 text-sm outline-none transition focus:border-series1'
@@ -66,7 +68,11 @@ export default function BoardFilters({
   density,
   onDensity,
 }) {
-  const { search, mine, side, tagInput, kind, fromAgents, openParts } = values
+  const { search, mine, side, tagInput, kind, fromAgents, openParts, area = '' } = values
+  const [areas, setAreas] = useState([])
+  useEffect(() => {
+    loadAreas().then(setAreas).catch(() => setAreas([]))
+  }, [])
 
   return (
     <div className="flex flex-wrap items-center gap-2" role="search" aria-label="Filter the board">
@@ -116,6 +122,21 @@ export default function BoardFilters({
           </option>
         ))}
       </select>
+      {areas.length > 0 && set.area && (
+        <select
+          aria-label="Area"
+          value={area}
+          onChange={(event) => set.area(event.target.value)}
+          className={`${control} ${on(Boolean(area))} max-w-40`}
+        >
+          <option value="">All areas</option>
+          {areas.map((a) => (
+            <option key={a.slug} value={a.slug}>
+              {a.name} ({a.open_count})
+            </option>
+          ))}
+        </select>
+      )}
       {isLead && (
         <Toggle
           pressed={fromAgents}

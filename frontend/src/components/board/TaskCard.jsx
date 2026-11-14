@@ -317,6 +317,7 @@ export default function TaskCard({
             <span className="text-[11px] font-medium text-ink-secondary">{KIND_LABELS[task.kind] ?? task.kind}</span>
           )}
           {task.side && <span className="text-[11px] text-ink-muted">{SIDE_LABELS[task.side] ?? task.side}</span>}
+          {task.area && <span dir="auto" className="text-[11px] text-series2">{task.area.name}</span>}
           <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
             <CompactIcons task={task} overdue={overdue} />
           </span>
@@ -327,14 +328,20 @@ export default function TaskCard({
         <>
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <span className="tabular me-0.5 text-[11px] text-ink-muted">
-              #{task.id}
+              {taskKey(task.id)}
               {task.parent_id && (
-                <span className="ms-1" title={`Subtask of #${task.parent_id}`}>
-                  ↳ #{task.parent_id}
+                <span className="ms-1" title={`Subtask of ${taskKey(task.parent_id)}`}>
+                  ↳ {taskKey(task.parent_id)}
                 </span>
               )}
             </span>
             {showStatus && <StatusBadge status={task.status} />}
+            {task.area && (
+              <span dir="auto" title={`Area: ${task.area.slug}`}
+                className="inline-flex items-center rounded-full border border-series2/40 px-2 py-0.5 text-[11px] text-series2">
+                {task.area.name}
+              </span>
+            )}
             <KindBadge kind={task.kind} hideTask />
             <SideBadge side={task.side} />
             <PointsBadge points={task.points} />

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../../../api/client'
 import { ActorBadge, DeployBadge, PlainText, TagBadge } from '../../Badges'
+import AreaPicker from '../AreaPicker'
 import PointsPicker from '../PointsPicker'
 import TaskPicker from '../TaskPicker'
 import {
@@ -57,6 +58,7 @@ function EditForm({ ctx, programmers, onDone }) {
     side: task.side ?? '',
     tags: (task.tags ?? []).join(', '),
     areas: (task.areas ?? []).join('\n'),
+    area: task.area?.slug ?? '',
     priority: task.priority,
     points: task.points,
     due_date: toDateInputValue(task.due_date),
@@ -90,6 +92,7 @@ function EditForm({ ctx, programmers, onDone }) {
     put('side', form.side || null, task.side)
     put('tags', splitList(form.tags), task.tags ?? [])
     put('areas', splitList(form.areas), task.areas ?? [])
+    if ((form.area || '') !== (task.area?.slug ?? '')) out.area = form.area || ''
     if (isLead) {
       put('title', form.title.trim(), task.title)
       put('description', form.description.trim() || null, task.description)
@@ -202,7 +205,11 @@ function EditForm({ ctx, programmers, onDone }) {
           />
         </div>
         <div>
-          <label className="block text-sm font-medium" htmlFor="edit-areas">Areas</label>
+          <label className="block text-sm font-medium" htmlFor="edit-area">Area</label>
+          <AreaPicker id="edit-area" value={form.area} onChange={(slug) => update('area', slug)} />
+        </div>
+        <div>
+          <label className="block text-sm font-medium" htmlFor="edit-areas">Code paths</label>
           <textarea
             id="edit-areas"
             rows={2}
@@ -502,6 +509,18 @@ export default function OverviewTab({ ctx }) {
 
         <div className="flex flex-wrap gap-6">
           <div>
+            <h4 className={sectionTitle}>Area</h4>
+            <div className="mt-1.5 text-sm">
+              {task.area ? (
+                <a href={`/board?area=${task.area.slug}`} dir="auto" className="text-series2 hover:underline">
+                  {task.area.name}
+                </a>
+              ) : (
+                <span className="text-ink-muted">None</span>
+              )}
+            </div>
+          </div>
+          <div>
             <h4 className={sectionTitle}>Tags</h4>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {(task.tags ?? []).length ? (
@@ -512,7 +531,7 @@ export default function OverviewTab({ ctx }) {
             </div>
           </div>
           <div className="min-w-0">
-            <h4 className={sectionTitle}>Areas</h4>
+            <h4 className={sectionTitle}>Code paths</h4>
             {(task.areas ?? []).length ? (
               <ul className="mt-1.5 space-y-0.5">
                 {task.areas.map((area) => (
