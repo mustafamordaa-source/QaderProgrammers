@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import TaskDetailModal from '../components/board/TaskDetailModal'
+import LoadMore from '../components/LoadMore'
 import { PlainText } from '../components/Badges'
 import { repoLabel } from '../components/board/detail/ContextTab'
 import { DOC_KIND_LABELS, LIBRARY_KIND_LABELS, githubBlobUrl, safeHttpsUrl } from '../lib/constants'
 import { formatDateTime } from '../lib/format'
+import { usePagedList } from '../lib/usePagedList'
 
 const controlClass =
   'rounded-lg border border-hairline bg-surface-raised px-3 py-1.5 text-sm outline-none focus:border-series1'
@@ -27,12 +29,12 @@ function useDebounced(value, delay = 300) {
 
 /** Everything written down that you can see: hub documents on tasks and the
  *  repo files and pages tasks link to (GET /library). */
+// Library rows have no id of their own.
+const libraryKey = (item) => [item.kind, item.task_id, item.slug, item.repo, item.path, item.url].join('|')
+
 export default function DocumentsPage() {
   const { user } = useAuth()
-  const [items, setItems] = useState([])
   const [people, setPeople] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
   const [search, setSearch] = useState('')
   const [kind, setKind] = useState('')
   const [repoInput, setRepoInput] = useState('')
@@ -40,23 +42,22 @@ export default function DocumentsPage() {
   const [selected, setSelected] = useState(null)
   const q = useDebounced(search.trim())
   const repo = useDebounced(repoInput.trim())
-  const requestId = useRef(0)
+  // 20 at a time; a new search or filter starts the list over.
+  const fetchPage = useCallback(
+    (pageNumber, pageSize) => api.libraryPage({ q, kind, repo }, pageNumber, pageSize),
+    [q, kind, repo],
+  )
+  const { items, total, loading, loadingMore, error, setError, hasMore, loadMore } = usePagedList(fetchPage, {
+    keyOf: libraryKey,
+  })
 
+  // Remember every repo seen, so the filter can suggest them.
   useEffect(() => {
-    const id = ++requestId.current
-    setLoading(true)
-    api
-      .library({ q, kind, repo })
-      .then((list) => {
-        if (id !== requestId.current) return
-        setItems(list)
-        setError(null)
-        // Remember every repo seen, so the filter can suggest them.
-        setRepos((current) => [...new Set([...current, ...list.map((i) => i.repo).filter(Boolean)])].sort())
-      })
-      .catch((err) => id === requestId.current && setError(err.message))
-      .finally(() => id === requestId.current && setLoading(false))
-  }, [q, kind, repo])
+    setRepos((current) => {
+      const next = [...new Set([...current, ...items.map((i) => i.repo).filter(Boolean)])].sort()
+      return next.length === current.length ? current : next
+    })
+  }, [items])
 
   useEffect(() => {
     api.directory().then(setPeople).catch(() => setPeople([]))
@@ -216,6 +217,16 @@ export default function DocumentsPage() {
             )
           })}
         </ul>
+      )}
+      {items.length > 0 && (
+        <LoadMore
+          shown={items.length}
+          total={total}
+          hasMore={hasMore}
+          loading={loadingMore}
+          onMore={loadMore}
+          noun="entries"
+        />
       )}
 
       {selected && (

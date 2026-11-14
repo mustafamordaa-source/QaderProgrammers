@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     # Claim lease, in hours.
     claim_default_hours: float = 2
     claim_max_hours: float = 8
+    # Most tasks one POST /tasks/import call may carry.
+    import_max_tasks: int = 200
     # Comma-separated ID prefixes the text lint refuses (for example the
     # prefixes of a private tracker). Set on the server, never in this repo.
     lint_blocked_id_prefixes: str = ""

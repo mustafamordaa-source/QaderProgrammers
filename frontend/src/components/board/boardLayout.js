@@ -17,9 +17,6 @@ export const COLUMN_WIDTH = 300
 export const COLUMN_GAP = 12
 export const COLUMN_STEP = COLUMN_WIDTH + COLUMN_GAP
 
-// Done can hold hundreds of cards; the board shows the latest ones first.
-export const DONE_PAGE = 20
-
 /** Is this task assigned to `user`, or held by a live claim of theirs? */
 export function isMine(task, user) {
   if (!task || !user) return false

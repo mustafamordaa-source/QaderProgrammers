@@ -1,3 +1,4 @@
+import LoadMore from '../LoadMore'
 import TaskCard from './TaskCard'
 import { ChevronRight, CollapseIcon } from './BoardIcons'
 
@@ -68,6 +69,25 @@ export function ColumnHeader({
         )}
       </span>
     </header>
+  )
+}
+
+/**
+ * The end of a column's cards: loads the next 20 when it scrolls into view
+ * inside the column, with a button for the same. Columns mark their scrolling
+ * box with `data-column-scroll`.
+ */
+export function ColumnMore({ shown, total, hasMore, loading, onMore }) {
+  return (
+    <LoadMore
+      shown={shown}
+      total={total}
+      hasMore={hasMore}
+      loading={loading}
+      onMore={onMore}
+      scrollRoot="[data-column-scroll]"
+      compact
+    />
   )
 }
 

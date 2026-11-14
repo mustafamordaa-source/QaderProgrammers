@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { api, isVersionConflict } from '../api/client'
+import { PAGE_SIZE, api, isVersionConflict } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import KanbanBoard from '../components/board/KanbanBoard'
 import CreateTaskModal from '../components/board/CreateTaskModal'
@@ -9,7 +9,10 @@ import TriageBar from '../components/board/TriageBar'
 import BoardFilters from '../components/board/BoardFilters'
 import BoardSkeleton from '../components/board/BoardSkeleton'
 import { useBoardPrefs, useFillHeight, useMediaQuery } from '../components/board/useBoardPrefs'
-import { assignablePeople, parseTaskRef, taskKey } from '../lib/constants'
+import { BOARD_COLUMNS, assignablePeople, parseTaskRef, taskKey } from '../lib/constants'
+
+const columnOf = (status) => BOARD_COLUMNS.find((column) => column.statuses.includes(status))?.key ?? null
+const EMPTY_BOARD = { tasks: [], columns: {} }
 
 /** Wait until the value stops changing, so typing does not fire a request per key. */
 function useDebounced(value, delay = 300) {
@@ -23,7 +26,11 @@ function useDebounced(value, delay = 300) {
 
 export default function BoardPage() {
   const { user, isLead, isReadOnly } = useAuth()
-  const [tasks, setTasks] = useState([])
+  // The cards loaded so far, plus per column: `total` and `points` for every
+  // task that matches the filters (from the server), and `served`, the rows the
+  // server has handed over, which says which page comes next.
+  const [board, setBoard] = useState(EMPTY_BOARD)
+  const tasks = board.tasks
   const [people, setPeople] = useState([])
   const [selected, setSelected] = useState(null)
   // A message to show at the top of the next task opened (a duplicate create).
@@ -51,6 +58,8 @@ export default function BoardPage() {
   const mySides = user?.sides ?? []
   // Leads: show only what agents filed, and tick Triage cards for bulk triage.
   const [fromAgents, setFromAgents] = useState(false)
+  // Tasks with an open question to you (for a lead: to any lead).
+  const [decisions, setDecisions] = useState(false)
   const [picked, setPicked] = useState(() => new Set())
   const tag = useDebounced(tagInput.trim())
   const q = useDebounced(search.trim())
@@ -58,23 +67,64 @@ export default function BoardPage() {
   // Ignore answers to filter sets the user has already moved past.
   const requestId = useRef(0)
 
+  const columns = useMemo(() => BOARD_COLUMNS.filter((column) => !column.leadOnly || isLead), [isLead])
+  // Every filter goes to the server, so each column can be read a page at a time.
+  const filters = useMemo(
+    () => ({
+      mine: mine || undefined,
+      side,
+      tag,
+      q,
+      kind,
+      area,
+      created_kind: fromAgents ? 'agent' : undefined,
+      awaiting_decision: decisions || undefined,
+      to: decisions && isLead ? 'leads' : undefined,
+      // Pool parts waiting in To do on a side in the user's "Works on".
+      ...(openParts ? { pool: true, my_sides: true } : {}),
+    }),
+    [mine, side, tag, q, kind, area, openParts, fromAgents, decisions, isLead],
+  )
+
+  const fetchColumn = useCallback(
+    (column, pageNumber) => {
+      // "Open parts" only ever shows To do.
+      if (openParts && column.key !== 'to_do') {
+        return Promise.resolve({ items: [], total: 0, points: 0 })
+      }
+      return api.tasksPage(
+        {
+          ...filters,
+          statuses: column.statuses.join(','),
+          // Done shows the latest changes first.
+          sort: column.key === 'done' ? 'updated' : undefined,
+        },
+        pageNumber,
+      )
+    },
+    [filters, openParts],
+  )
+
+  // The first 20 cards of every column. Changing a filter or the search starts over.
   const load = useCallback(async () => {
     const id = ++requestId.current
     setRefreshing(true)
     try {
-      const list = await api.tasks({
-        mine: mine || undefined,
-        side,
-        tag,
-        q,
-        kind,
-        area,
-        created_kind: fromAgents ? 'agent' : undefined,
-        // Pool parts waiting in To do on a side in the user's "Works on".
-        ...(openParts ? { pool: true, my_sides: true, status_filter: 'to_do' } : {}),
-      })
+      const pages = await Promise.all(columns.map((column) => fetchColumn(column, 1)))
       if (id !== requestId.current) return
-      setTasks(list.filter((task) => task.status !== 'dropped'))
+      const next = { tasks: [], columns: {} }
+      columns.forEach((column, index) => {
+        const page = pages[index]
+        next.tasks.push(...page.items)
+        next.columns[column.key] = {
+          total: page.total,
+          points: page.points ?? 0,
+          served: page.items.length,
+          loading: false,
+          ended: false,
+        }
+      })
+      setBoard(next)
       setError(null)
     } catch (err) {
       if (id === requestId.current) setError(err.message)
@@ -84,24 +134,110 @@ export default function BoardPage() {
         setRefreshing(false)
       }
     }
-  }, [mine, side, tag, q, kind, area, openParts, fromAgents])
+  }, [columns, fetchColumn])
 
   useEffect(() => {
     load()
   }, [load])
 
+  // Columns with a request for more cards in flight.
+  const loadingMore = useRef(new Set())
+
+  /** The next 20 cards of one column (the user scrolled near its end). */
+  const loadMore = useCallback(
+    async (key) => {
+      const column = columns.find((c) => c.key === key)
+      const meta = board.columns[key]
+      if (!column || !meta || meta.ended || meta.served >= meta.total || loadingMore.current.has(key)) return
+      const id = requestId.current
+      loadingMore.current.add(key)
+      setBoard((current) => ({
+        ...current,
+        columns: { ...current.columns, [key]: { ...current.columns[key], loading: true } },
+      }))
+      const pageNumber = Math.floor(meta.served / PAGE_SIZE) + 1
+      try {
+        const page = await fetchColumn(column, pageNumber)
+        if (id !== requestId.current) return
+        setBoard((current) => {
+          const seen = new Set(current.tasks.map((task) => task.id))
+          const fresh = page.items.filter((task) => !seen.has(task.id))
+          const served = (pageNumber - 1) * PAGE_SIZE + page.items.length
+          return {
+            tasks: fresh.length ? [...current.tasks, ...fresh] : current.tasks,
+            columns: {
+              ...current.columns,
+              [key]: {
+                total: page.total,
+                points: page.points ?? current.columns[key]?.points ?? 0,
+                served,
+                loading: false,
+                // An empty page is the end, whatever the count says.
+                ended: page.items.length === 0,
+              },
+            },
+          }
+        })
+      } catch (err) {
+        if (id !== requestId.current) return
+        setError(err.message)
+        setBoard((current) => ({
+          ...current,
+          columns: { ...current.columns, [key]: { ...current.columns[key], loading: false, ended: true } },
+        }))
+      } finally {
+        loadingMore.current.delete(key)
+      }
+    },
+    [board.columns, columns, fetchColumn],
+  )
+
   useEffect(() => {
     api.directory().then(setPeople).catch(() => setPeople([]))
   }, [])
 
-  function applyUpdate(updated) {
-    setTasks((current) => {
-      const rest = current.filter((task) => task.id !== updated.id)
-      if (updated.status === 'dropped') return rest
-      const exists = rest.length !== current.length
-      return exists
-        ? current.map((task) => (task.id === updated.id ? updated : task))
-        : [updated, ...current]
+  // The task as the open detail last showed it, for a task the board has not loaded.
+  const selectedRef = useRef(null)
+  selectedRef.current = selected
+
+  /**
+   * Put a changed (or, with `created`, a new) task on the board. A card that
+   * changes column moves, and both columns' counts and points follow.
+   */
+  function applyUpdate(updated, { created = false } = {}) {
+    const open = selectedRef.current?.id === updated.id ? selectedRef.current : null
+    setBoard((current) => {
+      const loaded = current.tasks.find((task) => task.id === updated.id) ?? null
+      const before = loaded ?? open
+      const from = before ? columnOf(before.status) : null
+      const to = columnOf(updated.status) // null: dropped tasks leave the board
+      let nextTasks
+      if (!to) nextTasks = current.tasks.filter((task) => task.id !== updated.id)
+      else if (loaded) nextTasks = current.tasks.map((task) => (task.id === updated.id ? updated : task))
+      else nextTasks = [updated, ...current.tasks]
+
+      const nextColumns = { ...current.columns }
+      const bump = (key, count, points, served = 0) => {
+        const meta = nextColumns[key]
+        if (!key || !meta) return
+        nextColumns[key] = {
+          ...meta,
+          total: Math.max(0, meta.total + count),
+          points: Math.max(0, meta.points + points),
+          served: Math.max(0, meta.served + served),
+        }
+      }
+      const pointsOf = (task) => Number(task?.points) || 0
+      if (before && from !== to) {
+        // One row fewer on the server for the old column: step its page pointer back.
+        bump(from, -1, -pointsOf(before), loaded ? -1 : 0)
+        bump(to, 1, pointsOf(updated))
+      } else if (before) {
+        bump(to, 0, pointsOf(updated) - pointsOf(before))
+      } else if (created) {
+        bump(to, 1, pointsOf(updated))
+      }
+      return { tasks: nextTasks, columns: nextColumns }
     })
     setSelected((current) => (current?.id === updated.id ? updated : current))
   }
@@ -111,14 +247,10 @@ export default function BoardPage() {
   // the filters keep holding.
   function applyOther(updated, { created = false } = {}) {
     if (created) {
-      applyUpdate(updated)
+      applyUpdate(updated, { created: true })
       return
     }
-    setTasks((current) =>
-      current.some((task) => task.id === updated.id)
-        ? current.map((task) => (task.id === updated.id ? updated : task))
-        : current,
-    )
+    if (tasks.some((task) => task.id === updated.id)) applyUpdate(updated)
   }
 
   /** Open a task from a card (a list row) or by ID from inside another task. */
@@ -242,7 +374,7 @@ export default function BoardPage() {
       setSelected(created)
       return created
     }
-    applyUpdate(created)
+    applyUpdate(created, { created: true })
     if (!isLead) {
       setNotice(`Task #${created.id} is in the backlog. A lead will triage it.`)
     }
@@ -283,8 +415,13 @@ export default function BoardPage() {
     await load()
   }
 
-  const filtered = mine || side || tag || q || kind || openParts || fromAgents
-  const activeCount = [mine, side, tagInput.trim(), search.trim(), kind, area, openParts, fromAgents].filter(Boolean).length
+  const filtered = mine || side || tag || q || kind || area || openParts || fromAgents || decisions
+  const activeCount = [mine, side, tagInput.trim(), search.trim(), kind, area, openParts, fromAgents, decisions].filter(Boolean).length
+  // Every task that matches, loaded or not.
+  const matchCount = columns.reduce(
+    (sum, column) => sum + Math.max(board.columns[column.key]?.total ?? 0, 0),
+    0,
+  )
   const programmers = assignablePeople(people)
 
   const prefs = useBoardPrefs()
@@ -303,6 +440,7 @@ export default function BoardPage() {
     setArea('')
     setOpenParts(false)
     setFromAgents(false)
+    setDecisions(false)
   }
 
   const dismiss = 'ms-auto shrink-0 rounded px-1 text-xs opacity-70 hover:opacity-100'
@@ -333,11 +471,11 @@ export default function BoardPage() {
       </div>
 
       <BoardFilters
-        values={{ search, mine, side, tagInput, kind, fromAgents, openParts, area }}
-        set={{ search: setSearch, mine: setMine, side: setSide, tagInput: setTagInput, kind: setKind, fromAgents: setFromAgents, openParts: setOpenParts, area: setArea }}
+        values={{ search, mine, side, tagInput, kind, fromAgents, openParts, area, decisions }}
+        set={{ search: setSearch, mine: setMine, side: setSide, tagInput: setTagInput, kind: setKind, fromAgents: setFromAgents, openParts: setOpenParts, area: setArea, decisions: setDecisions }}
         onClear={clearFilters}
         activeCount={activeCount}
-        resultCount={tasks.length}
+        resultCount={Math.max(matchCount, tasks.length)}
         refreshing={refreshing && !loading}
         isLead={isLead}
         isReadOnly={isReadOnly}
@@ -395,6 +533,8 @@ export default function BoardPage() {
         ) : (
           <KanbanBoard
             tasks={tasks}
+            columnMeta={board.columns}
+            onLoadMore={loadMore}
             user={user}
             filtered={Boolean(filtered)}
             density={prefs.density}

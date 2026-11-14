@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import TaskDetailModal from '../components/board/TaskDetailModal'
 import { PlainText } from '../components/Badges'
+import LoadMore from '../components/LoadMore'
 import NotificationItem from '../components/notifications/NotificationItem'
 import { useNotifications } from '../components/notifications/NotificationsContext'
 import { INBOX_REASON_LABELS } from '../lib/constants'
 import { formatDateTime } from '../lib/format'
+import { usePagedList } from '../lib/usePagedList'
 
 const REASON_STYLES = {
   question: 'border-warning/50 text-warning',
@@ -16,8 +18,6 @@ const REASON_STYLES = {
   review: 'border-series3/40 text-series3',
   triage: 'border-series2/40 text-series2',
 }
-
-const NOTIFICATION_LIMIT = 100
 
 function tabClass(active) {
   return [
@@ -29,26 +29,21 @@ function tabClass(active) {
 /** Everything the hub told you about, newest first. */
 function NotificationsSection({ onOpenTask }) {
   const { unread, setUnread, refresh } = useNotifications()
-  const [items, setItems] = useState([])
   const [unreadOnly, setUnreadOnly] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  // 20 at a time; the list starts over when the filter changes.
+  const fetchPage = useCallback(
+    (pageNumber, pageSize) => api.notificationsPage({ unread: unreadOnly }, pageNumber, pageSize),
+    [unreadOnly],
+  )
+  const { items, setItems, total, loading, loadingMore, error, setError, hasMore, loadMore, reload } =
+    usePagedList(fetchPage)
 
-  const load = useCallback(async () => {
-    try {
-      setItems(await api.notifications({ unread: unreadOnly, limit: NOTIFICATION_LIMIT }))
-      setError(null)
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }, [unreadOnly])
-
-  // Reload when the filter changes and when the bell's count moves.
+  // Something new arrived (the bell's count went up): start over from the top.
+  const lastUnread = useRef(unread)
   useEffect(() => {
-    load()
-  }, [load, unread])
+    if (unread > lastUnread.current) reload()
+    lastUnread.current = unread
+  }, [unread, reload])
 
   function markLocal(ids) {
     const now = new Date().toISOString()
@@ -91,10 +86,7 @@ function NotificationsSection({ onOpenTask }) {
     <>
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <label className="inline-flex items-center gap-2 rounded-lg border border-hairline px-3 py-1.5 text-sm">
-          <input type="checkbox" checked={unreadOnly} onChange={(event) => {
-              setLoading(true)
-              setUnreadOnly(event.target.checked)
-            }} />
+          <input type="checkbox" checked={unreadOnly} onChange={(event) => setUnreadOnly(event.target.checked)} />
           Unread only
         </label>
         <span className="text-xs text-ink-muted">{unread} unread</span>
@@ -132,9 +124,14 @@ function NotificationsSection({ onOpenTask }) {
               </li>
             ))}
           </ul>
-          {items.length >= NOTIFICATION_LIMIT && (
-            <p className="mt-2 text-xs text-ink-muted">Showing the latest {NOTIFICATION_LIMIT}.</p>
-          )}
+          <LoadMore
+            shown={items.length}
+            total={total}
+            hasMore={hasMore}
+            loading={loadingMore}
+            onMore={loadMore}
+            noun="notifications"
+          />
         </>
       )}
     </>

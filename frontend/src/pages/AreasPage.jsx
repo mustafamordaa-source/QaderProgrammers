@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { loadAreas } from '../components/board/AreaPicker'
+import LoadMore from '../components/LoadMore'
+import { usePagedList } from '../lib/usePagedList'
 
 const input =
   'w-full rounded-lg border border-hairline bg-surface-raised px-3 py-2 text-sm outline-none focus:border-series1'
@@ -122,11 +124,24 @@ function AreaRow({ area, areas, isLead, onSaved }) {
   )
 }
 
+const areaKey = (area) => area.slug
+
 /** The shared list of product areas: search, add (with the reuse check), and for leads edit and merge. */
 export default function AreasPage() {
   const { isLead } = useAuth()
-  const [areas, setAreas] = useState(null)
   const [q, setQ] = useState('')
+  const [search, setSearch] = useState('')
+  // Wait until typing stops before asking the server.
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(q.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [q])
+  // The rows on screen: 20 at a time, searched on the server.
+  const fetchPage = useCallback((pageNumber, pageSize) => api.areasPage(search, pageNumber, pageSize), [search])
+  const { items: shown, total, loading, loadingMore, error: listError, hasMore, loadMore, reload } =
+    usePagedList(fetchPage, { keyOf: areaKey })
+  // Every area, for the parent and merge pickers (shared with the board's cache).
+  const [areas, setAreas] = useState([])
   const [error, setError] = useState(null)
   const [adding, setAdding] = useState({ name: '', description: '', aliases: '' })
   const [clash, setClash] = useState(null)
@@ -134,7 +149,8 @@ export default function AreasPage() {
 
   async function refresh() {
     try {
-      setAreas(await loadAreas(true))
+      const [all] = await Promise.all([loadAreas(true), reload()])
+      setAreas(all)
       setError(null)
     } catch (err) {
       setError(err.message)
@@ -142,17 +158,9 @@ export default function AreasPage() {
   }
 
   useEffect(() => {
-    refresh()
-  }, [])
-
-  const shown = useMemo(() => {
-    const needle = q.trim().toLowerCase()
-    if (!areas) return []
-    if (!needle) return areas
-    return areas.filter((a) =>
-      [a.slug, a.name, a.description ?? '', ...(a.aliases ?? [])].join(' ').toLowerCase().includes(needle),
-    )
-  }, [areas, q])
+    if (!isLead) return
+    loadAreas().then(setAreas).catch(() => setAreas([]))
+  }, [isLead])
 
   async function add(event, confirmNew = false) {
     event?.preventDefault()
@@ -187,16 +195,21 @@ export default function AreasPage() {
       <input aria-label="Search areas" dir="auto" placeholder="Search by name, alias or description"
         className={`${input} mt-4`} value={q} onChange={(e) => setQ(e.target.value)} />
 
-      {error && <p role="alert" dir="auto" className="mt-3 text-sm text-critical">{error}</p>}
-      {areas === null && !error && <p className="mt-4 text-sm text-ink-muted">Loading…</p>}
-      {areas && (
+      {(error || listError) && (
+        <p role="alert" dir="auto" className="mt-3 text-sm text-critical">{error || listError}</p>
+      )}
+      {loading && shown.length === 0 && !listError && <p className="mt-4 text-sm text-ink-muted">Loading…</p>}
+      {!(loading && shown.length === 0) && (
         <ul className="mt-4 space-y-2">
           {shown.map((a) => (
-            <AreaRow key={a.slug} area={a} areas={areas} isLead={isLead} onSaved={refresh} />
+            <AreaRow key={a.slug} area={a} areas={areas.length ? areas : shown} isLead={isLead} onSaved={refresh} />
           ))}
-          {shown.length === 0 && <p className="text-sm text-ink-muted">No area matches.</p>}
+          {shown.length === 0 && (
+            <p className="text-sm text-ink-muted">{search ? 'No area matches.' : 'No areas yet.'}</p>
+          )}
         </ul>
       )}
+      <LoadMore shown={shown.length} total={total} hasMore={hasMore} loading={loadingMore} onMore={loadMore} noun="areas" />
 
       <form onSubmit={add} className="mt-6 rounded-lg border border-hairline p-3">
         <h2 className="text-sm font-semibold">Add an area</h2>

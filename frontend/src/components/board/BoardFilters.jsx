@@ -68,7 +68,7 @@ export default function BoardFilters({
   density,
   onDensity,
 }) {
-  const { search, mine, side, tagInput, kind, fromAgents, openParts, area = '' } = values
+  const { search, mine, side, tagInput, kind, fromAgents, openParts, area = '', decisions = false } = values
   const [areas, setAreas] = useState([])
   useEffect(() => {
     loadAreas().then(setAreas).catch(() => setAreas([]))
@@ -102,8 +102,11 @@ export default function BoardFilters({
         ))}
       </select>
       <input
-        aria-label="Tag"
+        aria-label="Tag, matched whole (for example phase-0)"
+        title="One tag, matched whole: phase-0, type-fix, needs-approval"
         placeholder="Tag"
+        autoCapitalize="none"
+        spellCheck={false}
         dir="auto"
         value={tagInput}
         onChange={(event) => set.tagInput(event.target.value)}
@@ -136,6 +139,20 @@ export default function BoardFilters({
             </option>
           ))}
         </select>
+      )}
+      {!isReadOnly && set.decisions && (
+        <Toggle
+          pressed={decisions}
+          onClick={() => set.decisions(!decisions)}
+          title={
+            isLead
+              ? 'Tasks with an open question to you or another lead. Open one and answer on its Discussion tab.'
+              : 'Tasks with an open question to you. Open one and answer on its Discussion tab.'
+          }
+          tone="series2"
+        >
+          Waiting on a decision
+        </Toggle>
       )}
       {isLead && (
         <Toggle

@@ -5,9 +5,11 @@ import UserFormModal from '../components/users/UserFormModal'
 import PasswordResetModal from '../components/users/PasswordResetModal'
 import DeactivateModal from '../components/users/DeactivateModal'
 import BotTokensModal from '../components/users/BotTokensModal'
+import LoadMore from '../components/LoadMore'
 import { formatDate, initials } from '../lib/format'
 import { RoleBadges } from '../components/Badges'
 import { SIDE_LABELS, isBot } from '../lib/constants'
+import { usePagedList } from '../lib/usePagedList'
 
 function StatusBadge({ active }) {
   return (
@@ -31,30 +33,33 @@ const actionClass =
 export default function UsersPage() {
   // Leads see the list; only admins change it.
   const { user: currentUser, logout, refreshUser, isAdmin } = useAuth()
-  const [users, setUsers] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [search, setSearch] = useState('')
+  const [q, setQ] = useState('')
+  // Wait until typing stops before asking the server.
+  useEffect(() => {
+    const timer = setTimeout(() => setQ(search.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [search])
+  // 20 at a time; a new search starts the list over.
+  const fetchPage = useCallback((pageNumber, pageSize) => api.adminUsersPage(q, pageNumber, pageSize), [q])
+  const {
+    items: users,
+    setItems: setUsers,
+    total,
+    loading,
+    loadingMore,
+    error,
+    setError,
+    hasMore,
+    loadMore,
+    reload: load,
+  } = usePagedList(fetchPage)
 
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState(null)
   const [resetting, setResetting] = useState(null)
   const [deactivating, setDeactivating] = useState(null)
   const [tokensFor, setTokensFor] = useState(null)
-
-  const load = useCallback(async () => {
-    try {
-      setUsers(await api.adminUsers())
-      setError(null)
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    load()
-  }, [load])
 
   function replace(updated) {
     setUsers((current) => current.map((row) => (row.id === updated.id ? updated : row)))
@@ -83,15 +88,13 @@ export default function UsersPage() {
     if (!isActive && row.id === currentUser.id) logout()
   }
 
-  const activeCount = users.filter((row) => row.is_active).length
-
   return (
     <>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">People</h1>
           <p className="mt-0.5 text-sm text-ink-secondary">
-            {activeCount} active {activeCount === 1 ? 'account' : 'accounts'} of {users.length}.
+            {total} {total === 1 ? 'account' : 'accounts'}{q ? ' match' : ''}, active ones first.
             Accounts are deactivated, never deleted, so task history stays intact.
             {!isAdmin && ' Only an admin can add or change accounts.'}
           </p>
@@ -116,7 +119,17 @@ export default function UsersPage() {
         </p>
       )}
 
-      {loading ? (
+      <input
+        type="search"
+        aria-label="Search people by name, handle or email"
+        placeholder="Search name, handle or email…"
+        dir="auto"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        className="mb-3 h-9 w-full rounded-lg border border-hairline bg-surface-raised px-3 text-sm outline-none transition focus:border-series1 sm:w-72"
+      />
+
+      {loading && users.length === 0 ? (
         <p className="text-sm text-ink-muted">Loading people…</p>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-hairline bg-surface">
@@ -241,6 +254,14 @@ export default function UsersPage() {
           </table>
         </div>
       )}
+      <LoadMore
+        shown={users.length}
+        total={total}
+        hasMore={hasMore}
+        loading={loadingMore}
+        onMore={loadMore}
+        noun="accounts"
+      />
 
       {creating && (
         <UserFormModal onClose={() => setCreating(false)} onSubmit={handleCreate} />

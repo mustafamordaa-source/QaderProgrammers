@@ -1,9 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import BoardScroller from './BoardScroller'
-import { CardList, CollapsedStrip, ColumnHeader, zoneClass } from './BoardColumn'
+import { CardList, CollapsedStrip, ColumnHeader, ColumnMore, zoneClass } from './BoardColumn'
 import {
   COLUMN_GAP,
-  DONE_PAGE,
   buildLanes,
   dropBlockReason,
   dropTarget,
@@ -22,9 +21,15 @@ const sumPoints = (list) => list.reduce((total, task) => total + (Number(task.po
  * this user (the server re-checks it); elsewhere a short line says why not.
  * Leads also see Triage. `groupBy` turns the board into swimlanes; on phones
  * the board shows one column at a time with tabs.
+ *
+ * `tasks` holds the cards loaded so far. `columnMeta[key]` carries the column's
+ * full `total` and `points` from the server; `onLoadMore(key)` fetches its next
+ * 20 cards when the user scrolls near the end of the column.
  */
 export default function KanbanBoard({
   tasks,
+  columnMeta = {},
+  onLoadMore = null,
   user,
   filtered = false,
   density = 'comfortable',
@@ -42,7 +47,6 @@ export default function KanbanBoard({
 }) {
   const [dragging, setDragging] = useState(null)
   const [hovered, setHovered] = useState(null)
-  const [doneLimit, setDoneLimit] = useState(DONE_PAGE)
   const [activeIndex, setActiveIndex] = useState(0)
   const scrollRef = useRef(null)
   const isLead = hasLeadRights(user)
@@ -68,8 +72,24 @@ export default function KanbanBoard({
     return map
   }, [lanes])
 
-  // Done shows the latest changes first, a page at a time.
-  const visible = (key) => (key === 'done' ? byColumn.done.slice(0, doneLimit) : byColumn[key])
+  const visible = (key) => byColumn[key]
+  // Every task in the column on the server, never fewer than the cards shown.
+  const totalOf = (key) => Math.max(columnMeta[key]?.total ?? 0, byColumn[key].length)
+  const pointsOf = (key) =>
+    columnMeta[key] && columnMeta[key].total > byColumn[key].length
+      ? columnMeta[key].points
+      : sumPoints(byColumn[key])
+  const hasMore = (key) => {
+    const meta = columnMeta[key]
+    return Boolean(onLoadMore && meta && !meta.ended && meta.served < meta.total)
+  }
+  const moreProps = (key) => ({
+    shown: byColumn[key].length,
+    total: totalOf(key),
+    hasMore: hasMore(key),
+    loading: Boolean(columnMeta[key]?.loading),
+    onMore: () => onLoadMore?.(key),
+  })
 
   const draggingTargets = dragging ? targetsFor(dragging, user) : []
 
@@ -139,16 +159,18 @@ export default function KanbanBoard({
     }
   }
 
-  function moreDone() {
-    const total = byColumn.done?.length ?? 0
-    if (total <= doneLimit) return null
+  // Swimlanes scroll as one sheet, so a column loads more from its header.
+  function moreButton(key) {
+    if (!hasMore(key)) return null
+    const loadingMore = Boolean(columnMeta[key]?.loading)
     return (
       <button
         type="button"
-        onClick={() => setDoneLimit((n) => n + DONE_PAGE)}
-        className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-series1 hover:bg-surface"
+        onClick={() => onLoadMore(key)}
+        disabled={loadingMore}
+        className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-series1 hover:bg-surface disabled:opacity-60"
       >
-        Show {Math.min(DONE_PAGE, total - doneLimit)} more
+        {loadingMore ? 'Loading…' : 'Load more'}
       </button>
     )
   }
@@ -208,7 +230,7 @@ export default function KanbanBoard({
               }`}
             >
               {column.label}
-              <span className="tabular ms-1.5 opacity-80">{byColumn[column.key].length}</span>
+              <span className="tabular ms-1.5 opacity-80">{totalOf(column.key)}</span>
             </button>
           ))}
         </div>
@@ -234,19 +256,19 @@ export default function KanbanBoard({
                   >
                     <ColumnHeader
                       column={column}
-                      count={byColumn[column.key].length}
-                      shown={column.key === 'done' ? list.length : null}
-                      points={sumPoints(byColumn[column.key])}
+                      count={totalOf(column.key)}
+                      shown={list.length}
+                      points={pointsOf(column.key)}
                       selectAll={selectAllFor(column)}
                     />
-                    <div className="board-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+                    <div data-column-scroll className="board-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-2">
                       <CardList
                         list={list}
                         empty={emptyLine(column.key, { filtered, isLead })}
                         cardProps={cardProps(column)}
                         groups={lanes ? buildLanes(list, groupBy, user) : null}
                       />
-                      {column.key === 'done' && <div className="mt-2 flex justify-center">{moreDone()}</div>}
+                      <ColumnMore {...moreProps(column.key)} />
                     </div>
                   </section>
                 )
@@ -284,7 +306,7 @@ export default function KanbanBoard({
           <div className="w-max min-w-full px-1 pb-2">
             <div className="sticky top-0 z-20 flex gap-3 bg-page pb-2 pt-1">
               {columns.map((column) => {
-                const count = byColumn[column.key].length
+                const count = totalOf(column.key)
                 const zone = zoneOf(column)
                 return isCollapsed(column.key) ? (
                   <div
@@ -308,11 +330,11 @@ export default function KanbanBoard({
                     <ColumnHeader
                       column={column}
                       count={count}
-                      shown={column.key === 'done' ? visible('done').length : null}
-                      points={sumPoints(byColumn[column.key])}
+                      shown={byColumn[column.key].length}
+                      points={pointsOf(column.key)}
                       onCollapse={() => onToggleCollapse(column.key)}
                       selectAll={selectAllFor(column)}
-                      extra={column.key === 'done' ? moreDone() : null}
+                      extra={moreButton(column.key)}
                     />
                   </div>
                 )
@@ -380,7 +402,7 @@ export default function KanbanBoard({
       <BoardScroller scrollRef={scrollRef} label="Task board" contentKey={contentKey}>
         <div className="flex h-full w-max gap-3 p-1 pb-2">
           {columns.map((column) => {
-            const count = byColumn[column.key].length
+            const count = totalOf(column.key)
             const zone = zoneOf(column)
             if (isCollapsed(column.key)) {
               return (
@@ -406,19 +428,19 @@ export default function KanbanBoard({
                 <ColumnHeader
                   column={column}
                   count={count}
-                  shown={column.key === 'done' ? list.length : null}
-                  points={sumPoints(byColumn[column.key])}
+                  shown={list.length}
+                  points={pointsOf(column.key)}
                   bodyId={bodyId}
                   onCollapse={() => onToggleCollapse(column.key)}
                   selectAll={selectAllFor(column)}
                 />
-                <div id={bodyId} className="board-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+                <div id={bodyId} data-column-scroll className="board-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-2">
                   <CardList
                     list={list}
                     empty={emptyLine(column.key, { filtered, isLead })}
                     cardProps={cardProps(column)}
                   />
-                  {column.key === 'done' && <div className="mt-2 flex justify-center">{moreDone()}</div>}
+                  <ColumnMore {...moreProps(column.key)} />
                 </div>
               </section>
             )

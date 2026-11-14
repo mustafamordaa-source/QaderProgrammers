@@ -24,7 +24,7 @@ import unicodedata
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse, PlainTextResponse
 from sqlalchemy import func, select
 
@@ -32,6 +32,7 @@ from app import lint
 from app.config import settings
 from app.deps import Auth, AuthCtx, DbSession, require_scope
 from app.events import record
+from app.paging import Page
 from app.models import (
     ContextKind,
     ContextLink,
@@ -540,10 +541,12 @@ def remove_context(
 def docs_index(
     auth: AuthCtx,
     db: DbSession,
+    response: Response,
+    paging: Page,
     q: str | None = Query(default=None, max_length=100),
     repo: str | None = None,
     kind: str | None = Query(default=None, pattern=r"^(hub_doc|repo_path|url)$"),
-    limit: int = Query(default=200, ge=1, le=1000),
+    limit: int = Query(default=200, ge=1, le=1000, description="Used only when neither page nor page_size is sent"),
 ) -> list[DocsIndexItem]:
     """Everything written down that you can see: hub documents and the repo
     files and pages tasks link to. Repo files linked from several tasks show
@@ -586,5 +589,9 @@ def docs_index(
                 url=link.url, updated_at=link.created_at,
             ))
 
+    # Newest first; kind, task and title break ties so pages do not share rows.
+    items.sort(key=lambda i: (i.kind, i.task_id, i.title))
     items.sort(key=lambda i: i.updated_at, reverse=True)
+    if paging.on:
+        return paging.slice(items, response)
     return items[:limit]

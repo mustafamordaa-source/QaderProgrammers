@@ -42,6 +42,16 @@ function readDetail(body, fallback) {
   return fallback
 }
 
+// Lists are read a page at a time; the API's default page size.
+export const PAGE_SIZE = 20
+
+function headerNumber(response, name, fallback) {
+  const value = Number(response.headers.get(name))
+  return Number.isFinite(value) && response.headers.get(name) !== null ? value : fallback
+}
+
+// `as: 'page'` answers { items, total, page, pageSize, totalPages, points }: the
+// rows plus the totals the API sends in its X-Total-* headers.
 async function request(path, { method = 'GET', body, params, form, as = 'json' } = {}) {
   const url = new URL(`${BASE_URL}${path}`, window.location.origin)
   if (params) {
@@ -84,7 +94,22 @@ async function request(path, { method = 'GET', body, params, form, as = 'json' }
       detail && typeof detail === 'object' && !Array.isArray(detail) ? detail : null,
     )
   }
+  if (as === 'page') {
+    const items = Array.isArray(payload) ? payload : []
+    return {
+      items,
+      total: headerNumber(response, 'X-Total-Count', items.length),
+      page: headerNumber(response, 'X-Page', 1),
+      pageSize: headerNumber(response, 'X-Page-Size', PAGE_SIZE),
+      totalPages: headerNumber(response, 'X-Total-Pages', 1),
+      points: headerNumber(response, 'X-Total-Points', null),
+    }
+  }
   return payload
+}
+
+function page(path, params, pageNumber = 1, pageSize = PAGE_SIZE) {
+  return request(path, { params: { ...params, page: pageNumber, page_size: pageSize }, as: 'page' })
 }
 
 /** True when the server refused a write because the task changed meanwhile. */
@@ -109,6 +134,9 @@ export const api = {
   // filters: { mine, ready, side, tag, q, status_filter, include_closed, created_kind, created_by,
   //            kind, parent_id, pool, my_sides, limit }
   tasks: (filters) => request('/tasks', { params: filters }),
+  // One page of the same list. Extra filters: statuses ('blocked,needs_confirm'),
+  // sort ('updated'), awaiting_decision (+ to: 'leads').
+  tasksPage: (filters, pageNumber, pageSize) => page('/tasks', filters, pageNumber, pageSize),
   inbox: () => request('/tasks/inbox'),
   task: (id) => request(`/tasks/${id}`),
   // Skeleton, required headings and starter criteria per task kind.
@@ -123,6 +151,7 @@ export const api = {
   // Product areas: an open list; adding a name close to an existing one is refused
   // (409, err.detail.suggestions) unless confirm_new is true.
   areas: (q) => request('/areas', { params: { q } }),
+  areasPage: (q, pageNumber, pageSize) => page('/areas', { q }, pageNumber, pageSize),
   createArea: (payload) => request('/areas', { method: 'POST', body: payload }),
   updateArea: (slug, payload) => request(`/areas/${encodeURIComponent(slug)}`, { method: 'PATCH', body: payload }),
   mergeArea: (slug, into) =>
@@ -198,9 +227,11 @@ export const api = {
 
   // Everything written down: hub documents and linked repo files and pages.
   library: (filters) => request('/library', { params: filters }),
+  libraryPage: (filters, pageNumber, pageSize) => page('/library', filters, pageNumber, pageSize),
 
   // People. Leads and admins list; only admins change anything.
   adminUsers: () => request('/users'),
+  adminUsersPage: (q, pageNumber, pageSize) => page('/users', { q }, pageNumber, pageSize),
   createUser: (payload) => request('/users', { method: 'POST', body: payload }),
   updateUser: (id, payload) => request(`/users/${id}`, { method: 'PATCH', body: payload }),
   resetPassword: (id, password) =>
@@ -211,6 +242,8 @@ export const api = {
   // Notifications. Preferences and the test email need a browser login.
   notifications: ({ unread, limit } = {}) =>
     request('/notifications', { params: { unread: unread ? 'true' : undefined, limit } }),
+  notificationsPage: ({ unread } = {}, pageNumber, pageSize) =>
+    page('/notifications', { unread: unread ? 'true' : undefined }, pageNumber, pageSize),
   notificationCount: () => request('/notifications/count'),
   markNotificationsRead: (ids) => request('/notifications/read', { method: 'POST', body: { ids } }),
   markAllNotificationsRead: () => request('/notifications/read', { method: 'POST', body: { all: true } }),

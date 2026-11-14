@@ -158,6 +158,28 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   page you can see, searchable, with shared repo files listed once. Agents
   read it before writing a new plan.
 
+## Paging, bulk import and the decision view
+
+- **Paging**: list endpoints (`/tasks`, `/tasks/inbox`, `/notifications`,
+  `/library`, `/areas`, `/users`, `/auth/users`, `/auth/tokens`) take `page`
+  (from 1) and `page_size` (default 20, at most 100). The body stays a JSON
+  array; the totals come in the `X-Total-Count`, `X-Page`, `X-Page-Size` and
+  `X-Total-Pages` headers (`/tasks` adds `X-Total-Points`). A call that sends
+  neither parameter answers as it did before paging, so older clients keep
+  working. The board reads each column 20 cards at a time
+  (`?statuses=blocked,needs_confirm&page=2`).
+- **Bulk import** (`POST /tasks/import`, leads and admins, token scope
+  `tasks:create`): `{dry_run, tasks: [...]}` with up to `IMPORT_MAX_TASKS`
+  (200) tasks. Each task has an `external_key`, stored as the fingerprint
+  `ext:<key>`; sending it again updates that task instead of adding a copy.
+  The text checks run per task and the answer lists `created`, `updated`,
+  `unchanged` or `error` for each. A `question` with `question_to` parks the
+  task in `needs_confirm`.
+- **Decision view** (`GET /tasks?awaiting_decision=true`): tasks with an open
+  question addressed to the caller, each with its `decision_questions`. A lead
+  adds `to=leads` for questions to any lead. On the board it is the "Waiting
+  on a decision" toggle; in the CLI, `qhub decisions`.
+
 ## Task kinds, links and subtasks
 
 - **Kinds**: task, bug, feature, chore, content, docs, research. Each kind has

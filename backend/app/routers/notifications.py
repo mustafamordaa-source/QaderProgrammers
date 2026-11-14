@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select, update
 
@@ -14,6 +14,7 @@ from app.config import settings
 from app.deps import AuthCtx, CurrentUser, DbSession, require_admin, require_human
 from app.models import DEFAULT_EMAIL_KINDS, ActorKind, Notification, NotifyKind, User, utcnow
 from app.notify import LEAD_ONLY_KINDS
+from app.paging import Page, count_rows
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -87,13 +88,20 @@ def _out(n: Notification) -> NotificationOut:
 def list_notifications(
     user: CurrentUser,
     db: DbSession,
+    response: Response,
+    paging: Page,
     unread: bool = False,
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=200, description="Used only when neither page nor page_size is sent"),
 ) -> list[NotificationOut]:
     stmt = select(Notification).where(Notification.user_id == user.id)
     if unread:
         stmt = stmt.where(Notification.read_at.is_(None))
-    rows = db.scalars(stmt.order_by(Notification.id.desc()).limit(limit)).unique()
+    if paging.on:
+        paging.set_headers(response, count_rows(db, stmt))
+        stmt = paging.window(stmt.order_by(Notification.id.desc()))
+    else:
+        stmt = stmt.order_by(Notification.id.desc()).limit(limit)
+    rows = db.scalars(stmt).unique()
     return [_out(n) for n in rows]
 
 
