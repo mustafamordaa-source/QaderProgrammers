@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 
 from app import ratelimit
@@ -19,6 +19,7 @@ from app.deps import (
     require_human,
 )
 from app.models import ApiToken, Role, User, utcnow
+from app.paging import Page
 from app.schemas import (
     ApiTokenCreate,
     ApiTokenCreated,
@@ -97,6 +98,8 @@ def whoami(auth: AuthCtx) -> dict:
 def list_users(
     user: CurrentUser,
     db: DbSession,
+    response: Response,
+    paging: Page,
     role: str | None = None,
     side: str | None = None,
 ) -> list[User]:
@@ -107,7 +110,7 @@ def list_users(
     """
     # Deactivated people are left out: this feeds the assignment pickers, and
     # nobody should be given new work. Leaders see everyone via GET /users.
-    stmt = select(User).where(User.is_active.is_(True)).order_by(User.name)
+    stmt = select(User).where(User.is_active.is_(True)).order_by(User.name, User.id)
     people = list(db.scalars(stmt))
     if role is not None:
         # Accepts the access roles (admin, lead, member, viewer) and the old
@@ -120,7 +123,7 @@ def list_users(
         ]
     if side is not None:
         people = [p for p in people if side in (p.sides or [])]
-    return people
+    return paging.slice(people, response) if paging.on else people
 
 
 # --- personal API tokens -------------------------------------------------------
@@ -132,13 +135,16 @@ def list_scopes() -> dict[str, str]:
 
 
 @router.get("/tokens", response_model=list[ApiTokenOut])
-def list_tokens(db: DbSession, auth: Auth = Depends(require_human)) -> list[ApiToken]:
+def list_tokens(
+    db: DbSession, response: Response, paging: Page, auth: Auth = Depends(require_human)
+) -> list[ApiToken]:
     """Your own tokens, newest first. Secrets are never shown again."""
-    return list(
+    rows = list(
         db.scalars(
             select(ApiToken).where(ApiToken.user_id == auth.user.id).order_by(ApiToken.id.desc())
         )
     )
+    return paging.slice(rows, response) if paging.on else rows
 
 
 @router.post("/tokens", response_model=ApiTokenCreated, status_code=status.HTTP_201_CREATED)

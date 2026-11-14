@@ -14,6 +14,7 @@ from app.config import check_production_settings, settings
 from contextlib import asynccontextmanager
 
 from app import mailer
+from app.paging import PAGING_HEADERS
 from app.routers import areas, auth, docs, github, kpi, notifications, tasks, users
 
 # Refuse to start in production with a public or short signing key.
@@ -44,6 +45,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Paged lists carry their totals in headers; a browser on another origin
+    # reads only the ones named here.
+    expose_headers=list(PAGING_HEADERS),
 )
 
 app.include_router(auth.router)

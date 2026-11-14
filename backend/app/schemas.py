@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
@@ -428,6 +429,14 @@ class SimilarOut(BaseModel):
     suggested_areas: list[AreaSuggestion] = []
 
 
+class DecisionQuestion(BaseModel):
+    comment_id: int
+    to: str | None = None
+    author: str | None = None
+    text: str
+    at: datetime
+
+
 class TaskOut(ORMModel):
     id: int
     title: str
@@ -475,6 +484,9 @@ class TaskOut(ORMModel):
     blocked_by: list[int] = []
     children_total: int = 0
     children_open: int = 0
+    # Filled only by GET /tasks?awaiting_decision=true: the open questions
+    # that make the task wait on the caller (or on a lead).
+    decision_questions: list[DecisionQuestion] = []
 
 
 class TaskDetailOut(TaskOut):
@@ -585,6 +597,82 @@ class TaskCreate(_TaskHubFields, _AssigneeValidatorMixin):
             if len(c) > 1_000:
                 raise ValueError("a criterion is at most 1,000 characters")
         return out
+
+
+class ImportTask(BaseModel):
+    """One task of a bulk import. `external_key` is the caller's stable id; the
+    hub keeps it as the fingerprint `ext:<key>` and updates that task on a
+    later import instead of adding a copy."""
+
+    external_key: str = Field(pattern=r"^[\w:./@#-]{1,190}$")
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=20_000)
+    kind: TaskKind = TaskKind.task
+    priority: Priority = Priority.medium
+    side: Side | None = None
+    # Area slug, name or alias. The area must exist (POST /areas adds one).
+    area: str | None = Field(default=None, max_length=60)
+    tags: list[str] = Field(default_factory=list)
+    criteria: list[str] = Field(default_factory=list, max_length=30)
+    restricted: bool = False
+    # Used on create only; a later import never moves the task.
+    status: TaskStatus = TaskStatus.backlog
+    # A question for a lead. It parks the task in needs_confirm until answered.
+    question: str | None = Field(default=None, max_length=20_000)
+    question_to: str | None = Field(default=None, max_length=40)
+
+    @field_validator("title")
+    @classmethod
+    def _strip_title(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("title must not be blank")
+        return v
+
+    @field_validator("tags")
+    @classmethod
+    def _tags(cls, v):
+        return _clean_list(v, pattern=TAG_RE, what="tag", limit=12)
+
+    @field_validator("criteria")
+    @classmethod
+    def _criteria(cls, v: list[str]) -> list[str]:
+        out = [c.strip() for c in v if c and c.strip()]
+        for c in out:
+            if len(c) > 1_000:
+                raise ValueError("a criterion is at most 1,000 characters")
+        return out
+
+    @field_validator("status")
+    @classmethod
+    def _create_status(cls, v: TaskStatus) -> TaskStatus:
+        if v not in CREATE_STATUSES:
+            raise ValueError("an imported task starts in proposed, backlog or to_do")
+        return v
+
+    @model_validator(mode="after")
+    def _question_needs_a_person(self):
+        self.question = (self.question or "").strip() or None
+        self.question_to = (self.question_to or "").strip() or None
+        if self.question and not self.question_to:
+            raise ValueError("question needs question_to: the handle of the person asked")
+        if self.question_to and not self.question:
+            raise ValueError("question_to needs question: the text to ask")
+        return self
+
+
+class ImportRequest(BaseModel):
+    # Validate and report without writing anything.
+    dry_run: bool = False
+    # Each entry is checked on its own, so one bad task does not fail the rest.
+    tasks: list[dict[str, Any]] = Field(min_length=1)
+
+
+class ImportResult(BaseModel):
+    external_key: str | None = None
+    action: str  # created | updated | unchanged | error
+    id: int | None = None
+    error: str | None = None
 
 
 class TaskUpdate(_TaskHubFields):

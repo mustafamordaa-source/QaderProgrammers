@@ -14,12 +14,13 @@ from __future__ import annotations
 import secrets
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.deps import BOT_SCOPES, DbSession, require_admin, require_leader
+from app.paging import Page, count_rows
 from app.models import (
     CLOSED_STATUSES,
     AccessRole,
@@ -133,12 +134,23 @@ def _assert_an_admin_remains(db: Session, *, changing: User, roles: list[str], i
 @router.get("", response_model=list[UserAdminOut])
 def list_users(
     db: DbSession,
+    response: Response,
+    paging: Page,
     lead: User = Depends(require_leader),
     include_inactive: bool = True,
+    q: str | None = Query(default=None, max_length=100, description="Match name, handle or email"),
 ) -> list[UserAdminOut]:
-    stmt = select(User).order_by(User.is_active.desc(), User.name)
+    stmt = select(User)
     if not include_inactive:
         stmt = stmt.where(User.is_active.is_(True))
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(or_(User.name.ilike(like), User.handle.ilike(like), User.email.ilike(like)))
+    if paging.on:
+        paging.set_headers(response, count_rows(db, stmt))
+    stmt = stmt.order_by(User.is_active.desc(), User.name, User.id)
+    if paging.on:
+        stmt = paging.window(stmt)
     counts = _open_task_counts(db)
     return [_to_admin_out(user, counts) for user in db.scalars(stmt)]
 

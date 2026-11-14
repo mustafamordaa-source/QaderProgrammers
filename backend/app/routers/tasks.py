@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from datetime import timedelta
 
+from pydantic import ValidationError
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
@@ -27,6 +29,7 @@ from app import lint
 from app.config import settings
 from app.deps import Auth, AuthCtx, DbSession, require_leader, require_scope
 from app.events import record
+from app.paging import Page
 from app.models import (
     CLOSED_STATUSES,
     AccountType,
@@ -58,7 +61,11 @@ from app.schemas import (
     CriterionCreate,
     CriterionOut,
     CriterionUpdate,
+    DecisionQuestion,
     DeployUpdate,
+    ImportRequest,
+    ImportResult,
+    ImportTask,
     GitLinkCreate,
     GitLinkOut,
     InboxItem,
@@ -598,7 +605,12 @@ def create_task(
 def list_tasks(
     auth: AuthCtx,
     db: DbSession,
+    response: Response,
+    paging: Page,
     status_filter: TaskStatus | None = None,
+    statuses: str | None = Query(
+        default=None, max_length=200, description="Several statuses, comma-separated (for example blocked,needs_confirm)"
+    ),
     assignee_id: int | None = None,
     side: str | None = None,
     tag: str | None = None,
@@ -614,17 +626,23 @@ def list_tasks(
     pool: bool | None = None,
     my_sides: bool = Query(default=False, description="Only tasks on a side in your Works on"),
     area: str | None = Query(default=None, max_length=60, description="Area slug; includes its sub-areas"),
-    limit: int = Query(default=500, ge=1, le=1000),
+    awaiting_decision: bool = Query(
+        default=False, description="Only tasks with an open question addressed to you (see `to`)"
+    ),
+    to: str | None = Query(
+        default=None, pattern=r"^(me|leads)$",
+        description="With awaiting_decision: 'me' (default) or, for a lead, 'leads' for questions to any lead",
+    ),
+    sort: str = Query(default="created", pattern=r"^(created|updated)$", description="Newest created or newest changed first"),
+    limit: int = Query(default=500, ge=1, le=1000, description="Used only when neither page nor page_size is sent"),
 ) -> list[TaskOut]:
+    """Tasks you can see, newest first. Send `page` and/or `page_size` to read a
+    page at a time; the totals come back in the X-Total-* headers."""
     if not auth.has("tasks:read"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This API token lacks the 'tasks:read' scope")
     user = auth.user
     now = utcnow()
-    stmt = (
-        select(Task)
-        .options(selectinload(Task.criteria), selectinload(Task.comments))
-        .order_by(Task.created_at.desc())
-    )
+    stmt = select(Task)
     visible = _visible_filter(user)
     if visible is not None:
         stmt = stmt.where(visible)
@@ -643,8 +661,19 @@ def list_tasks(
         if not user.is_lead:
             stmt = stmt.where(or_(mine_filter, Task.pool.is_(True)))
 
+    wanted_statuses: list[TaskStatus] = []
+    for name in (statuses or "").split(","):
+        if not name.strip():
+            continue
+        try:
+            wanted_statuses.append(TaskStatus(name.strip()))
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"statuses: no status '{name.strip()}'") from None
     if status_filter is not None:
         stmt = stmt.where(Task.status == status_filter)
+    elif wanted_statuses:
+        stmt = stmt.where(Task.status.in_(wanted_statuses))
     elif not include_closed:
         stmt = stmt.where(Task.status.not_in(list(CLOSED_STATUSES)))
     if side:
@@ -675,18 +704,66 @@ def list_tasks(
             found.append(Task.id == int(by_id.group(1)))
         stmt = stmt.where(or_(*found))
 
+    asked_ids: list[int] = []
+    if awaiting_decision:
+        if to == "leads":
+            if not user.is_lead:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                    detail="Only a lead lists the questions asked of every lead")
+            asked_ids = sorted({user.id, *(u.id for u in leads(db))})
+        else:
+            asked_ids = [user.id]
+        stmt = stmt.where(Task.id.in_(
+            select(Comment.task_id).where(
+                Comment.kind == CommentKind.question,
+                Comment.resolved_at.is_(None),
+                Comment.to_user_id.in_(asked_ids),
+            )
+        ))
+
+    # The id breaks ties, so two pages never share a row.
+    order = (Task.updated_at.desc(), Task.id.desc()) if sort == "updated" else (Task.created_at.desc(), Task.id.desc())
+    rows_stmt = stmt.options(selectinload(Task.criteria), selectinload(Task.comments)).order_by(*order)
+
     if tag or ready:
-        tasks = [
-            t for t in db.scalars(stmt).unique()
+        # Tags are a JSON list and blockers follow links: both are checked in Python.
+        matched = [
+            t for t in db.scalars(rows_stmt).unique()
             if (not tag or tag in (t.tags or [])) and (not ready or not t.open_blockers())
-        ][:limit]
+        ]
+        if paging.on:
+            tasks = paging.slice(matched, response, X_Total_Points=sum(t.points or 0 for t in matched))
+        else:
+            tasks = matched[:limit]
+    elif paging.on:
+        sub = stmt.with_only_columns(Task.id, Task.points).order_by(None).subquery()
+        total, points = db.execute(
+            select(func.count(), func.coalesce(func.sum(sub.c.points), 0)).select_from(sub)
+        ).one()
+        paging.set_headers(response, total, X_Total_Points=points)
+        tasks = list(db.scalars(paging.window(rows_stmt)).unique())
     else:
-        tasks = list(db.scalars(stmt.limit(limit)).unique())
-    return [_out(t) for t in tasks]
+        tasks = list(db.scalars(rows_stmt.limit(limit)).unique())
+
+    rows = [_out(t) for t in tasks]
+    if awaiting_decision:
+        for row, task in zip(rows, tasks):
+            row.decision_questions = [
+                DecisionQuestion(
+                    comment_id=c.id,
+                    to=(c.to_user.handle or c.to_user.name) if c.to_user else None,
+                    author=_who(c),
+                    text=c.body[:2_000],
+                    at=c.created_at,
+                )
+                for c in task.comments
+                if c.kind is CommentKind.question and c.resolved_at is None and c.to_user_id in asked_ids
+            ]
+    return rows
 
 
 @router.get("/inbox", response_model=list[InboxItem])
-def inbox(auth: AuthCtx, db: DbSession) -> list[InboxItem]:
+def inbox(auth: AuthCtx, db: DbSession, response: Response, paging: Page) -> list[InboxItem]:
     """What waits on you: open questions to you, your tasks that are parked,
     and for leaders the review and triage queues."""
     user = auth.user
@@ -699,7 +776,7 @@ def inbox(auth: AuthCtx, db: DbSession) -> list[InboxItem]:
             Comment.to_user_id == user.id,
             Comment.resolved_at.is_(None),
         )
-        .order_by(Comment.created_at)
+        .order_by(Comment.created_at, Comment.id)
     ).all()
     for c in questions:
         if _can_see(c.task, user):
@@ -716,16 +793,18 @@ def inbox(auth: AuthCtx, db: DbSession) -> list[InboxItem]:
             )
 
     mine = or_(Task.assignee_1_id == user.id, Task.assignee_2_id == user.id, Task.claimed_by == user.id)
-    for t in db.scalars(select(Task).where(mine, Task.status.in_([S.blocked, S.needs_confirm]))).unique():
+    for t in db.scalars(
+        select(Task).where(mine, Task.status.in_([S.blocked, S.needs_confirm])).order_by(Task.updated_at, Task.id)
+    ).unique():
         items.append(InboxItem(task_id=t.id, task_title=t.title, reason=t.status.value, at=t.updated_at))
 
     if user.is_lead:
         for t in db.scalars(
-            select(Task).where(Task.status.in_([S.in_review, S.proposed])).order_by(Task.updated_at)
+            select(Task).where(Task.status.in_([S.in_review, S.proposed])).order_by(Task.updated_at, Task.id)
         ).unique():
             reason = "review" if t.status is S.in_review else "triage"
             items.append(InboxItem(task_id=t.id, task_title=t.title, reason=reason, at=t.updated_at))
-    return items
+    return paging.slice(items, response) if paging.on else items
 
 
 @router.post("/triage", response_model=list[TriageResult])
@@ -781,6 +860,170 @@ def triage(
             notify(db, auth, users=_people(db, [task.assignee_1_id]), task=task,
                    kind=NotifyKind.assigned, text=task.summary or task.description)
         results.append(TriageResult(id=task_id, ok=True, status=payload.to))
+    db.commit()
+    return results
+
+
+# --- bulk import --------------------------------------------------------------
+
+
+def _import_auth(auth: AuthCtx) -> Auth:
+    if not auth.has("tasks:create"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="This API token lacks the 'tasks:create' scope")
+    if auth.user.is_bot or not auth.user.is_lead:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Only a lead or an admin imports tasks")
+    return auth
+
+
+def _error_text(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        return "; ".join(
+            f"{'.'.join(str(p) for p in e['loc']) or 'task'}: {e['msg'].removeprefix('Value error, ')}"
+            for e in exc.errors()
+        )
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        return detail.get("message", str(detail)) if isinstance(detail, dict) else str(detail)
+    return str(exc)
+
+
+def _import_question(db: Session, auth: Auth, task: Task, body: str, to_user: User) -> None:
+    """Ask `to_user` on the task and park it in needs_confirm, like a question with wait."""
+    comment = Comment(
+        task_id=task.id, author_id=auth.user.id, actor_kind=auth.kind, agent_name=auth.agent,
+        kind=CommentKind.question, body=body, to_user_id=to_user.id,
+    )
+    db.add(comment)
+    db.flush()
+    task.comments.append(comment)
+    from_status = task.status
+    moved = task.status in PARKABLE
+    if moved:
+        task.resume_status = task.status
+        task.status = S.needs_confirm
+    record(
+        db, auth, task_id=task.id, event_type=EventType.question_asked,
+        from_status=from_status if moved else None,
+        to_status=S.needs_confirm if moved else None,
+        data={"comment_id": comment.id, "to": to_user.id, "import": True},
+    )
+    notify(db, auth, users=[to_user], task=task, kind=NotifyKind.question, text=body, comment_id=comment.id)
+
+
+def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> tuple[str, int | None]:
+    """Create or update one imported task. Everything that can refuse the task
+    runs before the first write, so a refused task leaves nothing behind."""
+    key = lint.clean(item.external_key, field="external_key")
+    fingerprint = f"ext:{key}"
+    title = lint.clean(item.title, field="title")
+    description = lint.clean(item.description, field="description")
+    criteria = [lint.clean(c, field=f"criterion {n}") for n, c in enumerate(item.criteria, start=1)]
+    question = lint.clean(item.question, field="question")
+    area = resolve_area(db, item.area) if item.area else None
+    to_user = _resolve_person(db, item.question_to) if question else None
+
+    task = db.scalar(select(Task).where(Task.fingerprint == fingerprint).order_by(Task.id).limit(1))
+    if task is None:
+        if dry_run:
+            return "created", None
+        task = Task(
+            title=title, description=description, priority=item.priority, status=item.status,
+            created_by=auth.user.id, side=item.side, tags=item.tags or [], areas=[],
+            restricted=item.restricted, pool=False, created_kind=auth.kind, created_agent=auth.agent,
+            kind=item.kind, fingerprint=fingerprint, area_id=area.id if area else None,
+        )
+        db.add(task)
+        db.flush()
+        for n, text in enumerate(criteria, start=1):
+            db.add(Criterion(task_id=task.id, n=n, text=text))
+        record(db, auth, task_id=task.id, event_type=EventType.created, to_status=item.status,
+               timestamp=task.created_at, data={"import": True, "external_key": key})
+        if question:
+            _import_question(db, auth, task, question, to_user)
+        return "created", task.id
+
+    # Update: only the fields this import sent; the status stays where the team put it.
+    sent = item.model_fields_set
+    wanted: dict[str, object] = {"title": title}
+    if "description" in sent:
+        wanted["description"] = description
+    for field in ("kind", "priority", "side", "restricted"):
+        if field in sent:
+            wanted[field] = getattr(item, field)
+    if "tags" in sent:
+        wanted["tags"] = item.tags or []
+    if "area" in sent:
+        wanted["area_id"] = area.id if area else None
+    changed = {f: v for f, v in wanted.items() if getattr(task, f) != v}
+    add_criteria = criteria if not task.criteria else []
+    ask = bool(question) and not any(
+        c.kind is CommentKind.question and c.body.strip() == question.strip() for c in task.comments
+    )
+    if not (changed or add_criteria or ask):
+        return "unchanged", task.id
+    if dry_run:
+        return "updated", task.id
+
+    if changed:
+        data: dict[str, object] = {"import": True}
+        for field, value in changed.items():
+            old = getattr(task, field)
+            if field == "description":
+                data[field] = ["(changed)", "(changed)"]
+            elif field == "area_id":
+                data["area"] = [task.area.slug if task.area else None, area.slug if area else None]
+            else:
+                data[field] = [_plain(old), _plain(value)]
+            setattr(task, field, value)
+        record(db, auth, task_id=task.id, event_type=EventType.field_changed, data=data)
+    for n, text in enumerate(add_criteria, start=1):
+        db.add(Criterion(task_id=task.id, n=n, text=text))
+        record(db, auth, task_id=task.id, event_type=EventType.criterion_added, data={"n": n, "import": True})
+    if ask:
+        _import_question(db, auth, task, question, to_user)
+    _touch(task)
+    return "updated", task.id
+
+
+@router.post("/import", response_model=list[ImportResult])
+def import_tasks(
+    payload: ImportRequest,
+    db: DbSession,
+    auth: Auth = Depends(_import_auth),
+) -> list[ImportResult]:
+    """Create or update many tasks at once (leads and admins).
+
+    Each task carries an `external_key`. The hub keeps it as the fingerprint
+    `ext:<key>`, so sending the same batch again updates those tasks instead
+    of adding copies. Every task is checked on its own: the answer has one row
+    per task with `created`, `updated`, `unchanged` or `error`. With `dry_run`
+    nothing is written. The similar-task check and the per-kind description
+    headings do not apply to imports; the text checks do.
+    """
+    if len(payload.tasks) > settings.import_max_tasks:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"At most {settings.import_max_tasks} tasks per call; send the rest in another call.",
+        )
+    results: list[ImportResult] = []
+    seen: set[str] = set()
+    for raw in payload.tasks:
+        raw_key = raw.get("external_key")
+        key = raw_key if isinstance(raw_key, str) else None
+        try:
+            item = ImportTask.model_validate(raw)
+            if item.external_key in seen:
+                raise ValueError("external_key appears twice in this call")
+            seen.add(item.external_key)
+            action, task_id = _import_one(db, auth, item, dry_run=payload.dry_run)
+            if not payload.dry_run:
+                db.flush()
+            results.append(ImportResult(external_key=item.external_key, action=action, id=task_id))
+        except (ValidationError, HTTPException, ValueError) as exc:
+            results.append(ImportResult(external_key=key, action="error", error=_error_text(exc)))
+    # A dry run wrote nothing, so there is nothing to roll back.
     db.commit()
     return results
 

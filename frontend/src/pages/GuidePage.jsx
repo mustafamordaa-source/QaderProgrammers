@@ -264,6 +264,19 @@ const SECTIONS = [
         type: 'p',
         text: 'Every task has a key such as HUB-12, shown on its card and in its title. Open a task and click Copy link: the link (`/t/12`) opens that task for whoever you send it to, after they sign in. The address bar also holds `?task=12` while a task is open. Search finds a task by its key: type `HUB-12`, `#12` or `12`.',
       },
+      { type: 'h3', text: 'Long lists load 20 at a time' },
+      {
+        type: 'list',
+        items: [
+          'Each board column loads its first 20 cards. Scroll to the end of a column and the next 20 load. The column header shows how many are on screen and how many exist, for example "20 of 134".',
+          'Search and filters run on the server, so they also find tasks that are not on screen yet. Changing one starts every column again from its first 20.',
+          'The tag filter takes one tag and matches it whole: `phase-0`, `type-fix`, `needs-approval`.',
+          'The Inbox, Documents, People and Areas pages load the same way, with a "Load more" line at the end.',
+          'The CLI prints 20 rows and a footer such as `page 1 of 15 (296 tasks). Next: --page 2`. Use `--page N` for another page and `--limit N` (100 at most) for a longer one. With `--json` the footer goes to stderr.',
+          'API callers send `page` and `page_size` and read the totals from the `X-Total-Count`, `X-Page`, `X-Page-Size` and `X-Total-Pages` headers. A call without them answers as before.',
+        ],
+      },
+      { type: 'code', text: 'qhub ls --tag phase-0\nqhub ls --tag phase-0 --page 2\nqhub ls --status backlog --limit 50' },
       { type: 'h3', text: 'Claim and lease' },
       {
         type: 'list',
@@ -286,6 +299,12 @@ const SECTIONS = [
         type: 'code',
         text: 'qhub ask 12 --to omar "Should the CSV include dropped tasks?" --wait\nqhub inbox\nqhub answer 12 345 "No. Open and done tasks only."',
       },
+      { type: 'h3', text: 'Waiting on a decision' },
+      {
+        type: 'p',
+        text: 'To answer every open question in one place, press "Waiting on a decision" on the board. It keeps the tasks with an open question addressed to you. A lead sees the questions addressed to any lead. Open a task, answer on its Discussion tab, and the task leaves the list and returns to its earlier status. In the CLI, `qhub decisions` lists the same tasks with each question and the command that answers it. Leads add `--leads` for questions to any lead.',
+      },
+      { type: 'code', text: 'qhub decisions\nqhub decisions --leads\nqhub answer 12 345 "Phase 0. Ship it with the next release."' },
       { type: 'h3', text: 'Comments and mentions' },
       {
         type: 'list',
@@ -346,6 +365,36 @@ const SECTIONS = [
       },
       { type: 'code', text: 'qhub link 14 --blocks 12\nqhub links 12\nqhub unlink 12 7' },
       { type: 'p', text: 'In the first line, HUB-12 waits on HUB-14. The hub refuses links that make a loop.' },
+    ],
+  },
+  {
+    id: 'import',
+    title: 'Bulk import',
+    blocks: [
+      {
+        type: 'p',
+        text: 'A lead or an admin can create or update many tasks in one call, from the browser login or from a token with the `tasks:create` scope. Members, viewers and bots get 403. One call takes up to 200 tasks; `qhub import` splits a longer file by itself.',
+      },
+      {
+        type: 'list',
+        items: [
+          'Each task needs `external_key`, a stable ID of your own such as QX-0001, and a `title`. The hub stores the key as the fingerprint `ext:QX-0001`.',
+          'Optional fields: description, kind, priority, side, area (an existing area), tags, criteria, restricted, status (backlog unless you say otherwise), and question with question_to.',
+          'Sending the same file again is safe. A task whose key exists is updated (title, description, kind, priority, side, area, tags, restricted), never copied. Its status, assignees and comments stay as the team left them. Criteria are added only when the task has none.',
+          'A `question` with `question_to` (a handle) asks that person on the task and parks it in needs_confirm until the answer arrives. The same question is never asked twice.',
+          'The text checks run on every task. A refused task comes back with `error` and the reason; the other tasks still go in. The answer has one row per task: created, updated, unchanged or error.',
+          'The similar-task check and the description headings per kind do not apply to imports.',
+          'Run with `--dry-run` first. It checks every task and reports what would happen, and writes nothing.',
+        ],
+      },
+      {
+        type: 'code',
+        text: 'qhub import tasks.json --dry-run\nqhub import tasks.json',
+      },
+      {
+        type: 'code',
+        text: '[\n  {\n    "external_key": "QX-0001",\n    "title": "Refund totals are rounded wrong",\n    "kind": "bug",\n    "priority": "high",\n    "side": "be",\n    "area": "payments",\n    "tags": ["phase-0", "type-fix"],\n    "criteria": ["Refund totals match the invoice"],\n    "question": "Fix in phase 0 or later?",\n    "question_to": "omar"\n  }\n]',
+      },
     ],
   },
   {

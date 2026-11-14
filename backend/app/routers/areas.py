@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app import lint
 from app.deps import Auth, AuthCtx, DbSession, require_leader, require_scope
 from app.models import Area, Task, User, utcnow
+from app.paging import Page
 from app.schemas import (
     AREA_SLUG_RE,
     AreaBrief,
@@ -203,6 +204,8 @@ def _area_out(db: Session, a: Area) -> AreaOut:
 def list_areas(
     auth: AuthCtx,
     db: DbSession,
+    response: Response,
+    paging: Page,
     q: str | None = Query(default=None, max_length=100, description="Match name, slug, alias or description"),
     include_merged: bool = False,
 ) -> list[AreaOut]:
@@ -216,6 +219,9 @@ def list_areas(
             return wanted in normalize(hay) or max(
                 [name_score(q, a.name)] + [name_score(q, x) for x in a.aliases or []]) >= 60
         rows = [a for a in rows if hit(a)]
+    if paging.on:
+        # Counts are worked out for the rows of this page only.
+        rows = paging.slice(rows, response)
     return [_area_out(db, a) for a in rows]
 
 
