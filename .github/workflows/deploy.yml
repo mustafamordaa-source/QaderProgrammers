@@ -25,4 +25,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Test, back up, build, start and health-check
+        env:
+          # The hub's build is small (a Python test image and a Vite build), and
+          # the staging stack leaves about 2 GB free, so 2048 MB kept failing.
+          DEPLOY_MIN_FREE_MB: "1536"
         run: bash scripts/deploy.sh
