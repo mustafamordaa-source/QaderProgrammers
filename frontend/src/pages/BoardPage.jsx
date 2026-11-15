@@ -8,11 +8,31 @@ import TaskDetailModal from '../components/board/TaskDetailModal'
 import TriageBar from '../components/board/TriageBar'
 import BoardFilters from '../components/board/BoardFilters'
 import BoardSkeleton from '../components/board/BoardSkeleton'
-import { useBoardPrefs, useFillHeight, useMediaQuery } from '../components/board/useBoardPrefs'
+import {
+  hasFilters,
+  useBoardFilters,
+  useBoardPrefs,
+  useFillHeight,
+  useMediaQuery,
+} from '../components/board/useBoardPrefs'
 import { BOARD_COLUMNS, assignablePeople, parseTaskRef, taskKey } from '../lib/constants'
 
 const columnOf = (status) => BOARD_COLUMNS.find((column) => column.statuses.includes(status))?.key ?? null
 const EMPTY_BOARD = { tasks: [], columns: {} }
+const EMPTY_PAGE = { items: [], total: 0, points: 0 }
+// "Free to take" lists To do (lane planned) and Backlog only.
+const READY_STATUSES = ['to_do', 'backlog']
+const LANE_STATUS = { planned: 'to_do', backlog: 'backlog' }
+
+/** The statuses one column asks for under the current filters; empty skips the column. */
+function columnStatuses(column, filters) {
+  return column.statuses.filter(
+    (status) =>
+      (filters.status.length === 0 || filters.status.includes(status)) &&
+      (!filters.ready || READY_STATUSES.includes(status)) &&
+      (!filters.lane || LANE_STATUS[filters.lane] === status),
+  )
+}
 
 /** Wait until the value stops changing, so typing does not fire a request per key. */
 function useDebounced(value, delay = 300) {
@@ -47,62 +67,79 @@ export default function BoardPage() {
   // The task openTask loaded itself, so the URL effect does not load it twice.
   const openedFromBoard = useRef(null)
 
-  const [mine, setMine] = useState(false)
-  const [side, setSide] = useState('')
-  const [tagInput, setTagInput] = useState('')
-  const [search, setSearch] = useState('')
-  const [kind, setKind] = useState('')
-  // `/board?area=payments` opens the board on one area (the Areas page links here).
-  const [area, setArea] = useState(() => new URLSearchParams(window.location.search).get('area') ?? '')
-  const [openParts, setOpenParts] = useState(false)
-  const mySides = user?.sides ?? []
-  // Leads: show only what agents filed, and tick Triage cards for bulk triage.
-  const [fromAgents, setFromAgents] = useState(false)
-  // Tasks with an open question to you (for a lead: to any lead).
-  const [decisions, setDecisions] = useState(false)
+  // Every filter lives in the query string (`/board?ready=1&side=fe`), so a
+  // filtered board is a link to share. `/board?area=payments` (the Areas page)
+  // still opens the board on one area.
+  const { filters, update: updateFilters, replace: replaceFilters } = useBoardFilters()
+  // The search box types freely; the URL (and the request) follow 300 ms later.
+  const [search, setSearch] = useState(filters.q)
+  const typed = useDebounced(search.trim())
+  const lastQ = useRef(filters.q)
+  useEffect(() => {
+    // The URL changed from outside the box (a view, Clear all, Back): show it.
+    if (filters.q !== lastQ.current) {
+      lastQ.current = filters.q
+      setSearch(filters.q)
+    }
+  }, [filters.q])
+  // setSearchParams changes with every URL change, so the writer reads it from a
+  // ref: only a new debounced value may write, never a URL change alone.
+  const updateRef = useRef(updateFilters)
+  updateRef.current = updateFilters
+  useEffect(() => {
+    if (typed !== lastQ.current) {
+      lastQ.current = typed
+      updateRef.current({ q: typed })
+    }
+  }, [typed])
+  // Leads tick Triage cards for bulk triage.
   const [picked, setPicked] = useState(() => new Set())
-  const tag = useDebounced(tagInput.trim())
-  const q = useDebounced(search.trim())
 
   // Ignore answers to filter sets the user has already moved past.
   const requestId = useRef(0)
 
   const columns = useMemo(() => BOARD_COLUMNS.filter((column) => !column.leadOnly || isLead), [isLead])
   // Every filter goes to the server, so each column can be read a page at a time.
-  const filters = useMemo(
+  const apiFilters = useMemo(
     () => ({
-      mine: mine || undefined,
-      side,
-      tag,
-      q,
-      kind,
-      area,
-      created_kind: fromAgents ? 'agent' : undefined,
-      awaiting_decision: decisions || undefined,
-      to: decisions && isLead ? 'leads' : undefined,
-      // Pool parts waiting in To do on a side in the user's "Works on".
-      ...(openParts ? { pool: true, my_sides: true } : {}),
+      mine: filters.mine || undefined,
+      ready: filters.ready || undefined,
+      lane: filters.lane || undefined,
+      side: filters.side,
+      tag: filters.tag,
+      q: filters.q,
+      area: filters.area,
+      kinds: filters.kind,
+      priority: filters.priority,
+      subtasks: filters.subtasks === 'all' ? undefined : filters.subtasks,
+      created_kind: filters.agents && isLead ? 'agent' : undefined,
+      awaiting_decision: filters.decision || undefined,
+      to: filters.decision && isLead ? 'leads' : undefined,
     }),
-    [mine, side, tag, q, kind, area, openParts, fromAgents, decisions, isLead],
+    [filters, isLead],
+  )
+  // The same filters for the menu counts (/tasks/facets), status included.
+  const facetParams = useMemo(
+    () => ({ ...apiFilters, statuses: filters.status.length ? filters.status.join(',') : undefined }),
+    [apiFilters, filters.status],
   )
 
   const fetchColumn = useCallback(
     (column, pageNumber) => {
-      // "Open parts" only ever shows To do.
-      if (openParts && column.key !== 'to_do') {
-        return Promise.resolve({ items: [], total: 0, points: 0 })
-      }
+      const statuses = columnStatuses(column, filters)
+      // A status filter, Free to take or a lane leaves some columns empty.
+      if (statuses.length === 0) return Promise.resolve(EMPTY_PAGE)
       return api.tasksPage(
         {
-          ...filters,
-          statuses: column.statuses.join(','),
+          ...apiFilters,
+          statuses: statuses.join(','),
           // Done shows the latest changes first.
           sort: column.key === 'done' ? 'updated' : undefined,
         },
         pageNumber,
       )
     },
-    [filters, openParts],
+    [apiFilters, filters],
   )
 
   // The first 20 cards of every column. Changing a filter or the search starts over.
@@ -354,12 +391,12 @@ export default function BoardPage() {
       applyUpdate(result)
       setNotice(
         result?.warnings?.length
-          ? `Claimed #${task.id}, with warnings: ${result.warnings.join(' ')}`
-          : `You hold the claim on #${task.id} now.`,
+          ? `You took ${taskKey(task.id)}, with warnings: ${result.warnings.join(' ')}`
+          : `You took ${taskKey(task.id)}. It is in progress and yours now.`,
       )
     } catch (err) {
       if (isVersionConflict(err)) await load()
-      setError(err.message)
+      setError(`Could not take ${taskKey(task.id)}: ${err.message}`)
     } finally {
       setClaimingId(null)
     }
@@ -415,8 +452,7 @@ export default function BoardPage() {
     await load()
   }
 
-  const filtered = mine || side || tag || q || kind || area || openParts || fromAgents || decisions
-  const activeCount = [mine, side, tagInput.trim(), search.trim(), kind, area, openParts, fromAgents, decisions].filter(Boolean).length
+  const filtered = hasFilters(filters)
   // Every task that matches, loaded or not.
   const matchCount = columns.reduce(
     (sum, column) => sum + Math.max(board.columns[column.key]?.total ?? 0, 0),
@@ -430,18 +466,6 @@ export default function BoardPage() {
   // is always on screen instead of below the tallest column.
   const boardRef = useRef(null)
   const boardHeight = useFillHeight(boardRef)
-
-  function clearFilters() {
-    setMine(false)
-    setSide('')
-    setTagInput('')
-    setSearch('')
-    setKind('')
-    setArea('')
-    setOpenParts(false)
-    setFromAgents(false)
-    setDecisions(false)
-  }
 
   const dismiss = 'ms-auto shrink-0 rounded px-1 text-xs opacity-70 hover:opacity-100'
 
@@ -471,15 +495,16 @@ export default function BoardPage() {
       </div>
 
       <BoardFilters
-        values={{ search, mine, side, tagInput, kind, fromAgents, openParts, area, decisions }}
-        set={{ search: setSearch, mine: setMine, side: setSide, tagInput: setTagInput, kind: setKind, fromAgents: setFromAgents, openParts: setOpenParts, area: setArea, decisions: setDecisions }}
-        onClear={clearFilters}
-        activeCount={activeCount}
+        filters={filters}
+        update={updateFilters}
+        replace={replaceFilters}
+        search={search}
+        onSearch={setSearch}
+        facetParams={facetParams}
         resultCount={Math.max(matchCount, tasks.length)}
         refreshing={refreshing && !loading}
         isLead={isLead}
         isReadOnly={isReadOnly}
-        mySides={mySides}
         groupBy={prefs.groupBy}
         onGroupBy={prefs.setGroupBy}
         density={prefs.density}
@@ -546,6 +571,7 @@ export default function BoardPage() {
             onMove={handleMove}
             onClaim={isReadOnly ? null : handleClaim}
             claimingId={claimingId}
+            showLane={filters.ready}
             selectedIds={picked}
             onSelect={isLead ? selectOne : null}
             onSelectMany={isLead ? selectMany : null}

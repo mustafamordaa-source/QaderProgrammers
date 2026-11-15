@@ -1,0 +1,257 @@
+"""Claiming from the backlog, taking one part of a task, the people on a task,
+the "free to take" list and the filter counts."""
+
+from __future__ import annotations
+
+from app.models import Criterion, Task
+
+
+def _import(client, h, *tasks):
+    r = client.post("/tasks/import", headers=h, json={"tasks": list(tasks)})
+    assert r.status_code == 200, r.text
+    return [row["id"] for row in r.json()]
+
+
+def _item(key, **fields):
+    return {"external_key": key, "title": f"Imported {key}", **fields}
+
+
+def _member(alice, db_session, sides=("be",)):
+    alice.sides = list(sides)
+    db_session.commit()
+    return alice
+
+
+class TestClaimFromBacklog:
+    def test_imported_task_is_pool_and_a_member_claims_it_from_backlog(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        [tid] = _import(client, auth(leader), _item("QX-1", side="be"))
+        row = client.get(f"/tasks/{tid}", headers=auth(alice)).json()
+        assert row["pool"] is True and row["status"] == "backlog"
+        assert row["claimable"] is True and row["lane"] == "backlog" and row["claim_block"] is None
+        r = client.post(f"/tasks/{tid}/claim", headers=auth(alice), json={})
+        assert r.status_code == 200, r.text
+        out = r.json()
+        assert out["status"] == "in_progress" and out["claimed_by"] == alice.id
+        # Yours now: not "claimable" again, and no lock reason.
+        assert out["claimable"] is False and out["claim_block"] is None
+        assert [(p["handle"], p["role"]) for p in out["people"]] == [(alice.handle or alice.name, "claim")]
+
+    def test_refusals_explain_why(self, client, auth, leader, alice, bob, db_session):
+        _member(alice, db_session, ("fe",))
+        h = auth(leader)
+        [other_side, asked] = _import(
+            client, h, _item("QX-2", side="be"),
+            _item("QX-3", side="fe", question="Is this allowed?", question_to=str(leader.id)),
+        )
+        r = client.post(f"/tasks/{other_side}/claim", headers=auth(alice), json={})
+        assert r.status_code == 403 and "Backend work" in r.json()["detail"]
+        row = client.get(f"/tasks/{asked}", headers=auth(alice)).json()
+        assert row["status"] == "needs_confirm" and row["claim_block"] == "waiting_decision"
+        r = client.post(f"/tasks/{asked}/claim", headers=auth(alice), json={})
+        assert r.status_code == 409 and "decision" in r.json()["detail"]
+        # A non-pool task nobody assigned to you.
+        closed = client.post("/tasks", headers=h, json={"title": "Lead work", "status": "to_do"}).json()
+        r = client.post(f"/tasks/{closed['id']}/claim", headers=auth(bob), json={})
+        assert r.status_code == 403 and "pool" in r.json()["detail"]
+
+    def test_ready_lists_planned_then_backlog_by_priority(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        h = auth(leader)
+        low, urgent, planned = _import(
+            client, h, _item("QX-4", side="be", priority="low"), _item("QX-5", side="be", priority="urgent"),
+            _item("QX-6", side="be", priority="low", status="to_do"),
+        )
+        rows = client.get("/tasks?ready=true", headers=auth(alice)).json()
+        assert [r["id"] for r in rows] == [planned, urgent, low]
+        assert [r["lane"] for r in rows] == ["planned", "backlog", "backlog"]
+        only_planned = client.get("/tasks?ready=true&lane=planned", headers=auth(alice)).json()
+        assert [r["id"] for r in only_planned] == [planned]
+        urgent_only = client.get("/tasks?priority=urgent,high", headers=auth(alice)).json()
+        assert [r["id"] for r in urgent_only] == [urgent]
+
+
+class TestTakePart:
+    def _task(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        [tid] = _import(client, auth(leader), _item("QX-10", side="be", criteria=["Part one", "Part two"]))
+        return tid
+
+    def test_take_makes_a_claimed_subtask_and_the_parent_shows_the_person(self, client, auth, leader, alice, db_session):
+        tid = self._task(client, auth, leader, alice, db_session)
+        before = client.get(f"/tasks/{tid}", headers=auth(alice)).json()
+        assert [c["can_take"] for c in before["criteria"]] == [True, True]
+        r = client.post(f"/tasks/{tid}/criteria/2/take", headers=auth(alice), json={})
+        assert r.status_code == 201, r.text
+        sub = r.json()
+        assert sub["parent_id"] == tid and sub["status"] == "in_progress" and sub["claimed_by"] == alice.id
+        assert sub["title"] == "Part two" and sub["side"] == "be" and sub["pool"] is True
+        parent = client.get(f"/tasks/{tid}", headers=auth(alice)).json()
+        assert parent["status"] == "in_progress"
+        assert parent["parts_total"] == 2 and parent["parts_taken"] == 1
+        assert [(p["role"], p["task_id"], p["part"]) for p in parent["people"]] == [("part", sub["id"], 2)]
+        taken = parent["criteria"][1]
+        assert taken["subtask"]["id"] == sub["id"] and taken["can_take"] is False
+        assert f"HUB-{sub['id']}" in taken["take_block_text"]
+        # Taking it twice is refused with the reason.
+        again = client.post(f"/tasks/{tid}/criteria/2/take", headers=auth(leader), json={})
+        assert again.status_code == 409 and f"HUB-{sub['id']}" in again.json()["detail"]
+        # Part one is still free.
+        assert parent["criteria"][0]["can_take"] is True
+
+    def test_done_subtask_marks_the_part_met(self, client, auth, leader, alice, db_session):
+        tid = self._task(client, auth, leader, alice, db_session)
+        sub = client.post(f"/tasks/{tid}/criteria/1/take", headers=auth(alice), json={}).json()
+        db_session.query(Criterion).filter_by(task_id=sub["id"]).update({"state": "met", "evidence": "ok"})
+        db_session.commit()
+        r = client.patch(f"/tasks/{sub['id']}/status", headers=auth(alice), json={"status": "in_review"})
+        assert r.status_code == 200, r.text
+        r = client.patch(f"/tasks/{sub['id']}/status", headers=auth(leader), json={"status": "done"})
+        assert r.status_code == 200, r.text
+        parent = client.get(f"/tasks/{tid}", headers=auth(leader)).json()
+        part = parent["criteria"][0]
+        assert part["state"] == "met" and part["evidence"] == f"Done in HUB-{sub['id']}"
+
+    def test_dropped_subtask_frees_the_part(self, client, auth, leader, alice, db_session):
+        tid = self._task(client, auth, leader, alice, db_session)
+        sub = client.post(f"/tasks/{tid}/criteria/1/take", headers=auth(alice), json={}).json()
+        client.patch(f"/tasks/{sub['id']}/status", headers=auth(leader), json={"status": "dropped", "comment": "no"})
+        parent = client.get(f"/tasks/{tid}", headers=auth(alice)).json()
+        assert parent["criteria"][0]["can_take"] is True and parent["parts_taken"] == 0
+
+    def test_other_side_and_waiting_tasks_cannot_be_taken(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session, ("fe",))
+        h = auth(leader)
+        [be_task, asked] = _import(
+            client, h, _item("QX-11", side="be", criteria=["A"]),
+            _item("QX-12", side="fe", criteria=["B"], question="Allowed?", question_to=str(leader.id)),
+        )
+        r = client.post(f"/tasks/{be_task}/criteria/1/take", headers=auth(alice), json={})
+        assert r.status_code == 403 and "Backend" in r.json()["detail"]
+        r = client.post(f"/tasks/{asked}/criteria/1/take", headers=auth(alice), json={})
+        assert r.status_code == 409 and "decision" in r.json()["detail"]
+        assert client.post(f"/tasks/{be_task}/criteria/9/take", headers=auth(leader), json={}).status_code == 404
+
+
+class TestFiltersAndFacets:
+    def test_subtasks_filter_and_facets(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        h = auth(leader)
+        [tid, other] = _import(client, h, _item("QX-20", side="be", kind="bug", criteria=["A"]),
+                               _item("QX-21", side="be", kind="feature", status="to_do"))
+        sub = client.post(f"/tasks/{tid}/criteria/1/take", headers=auth(alice), json={}).json()
+        top = client.get("/tasks?subtasks=top", headers=h).json()
+        assert sub["id"] not in [r["id"] for r in top]
+        only = client.get("/tasks?subtasks=only", headers=h).json()
+        assert [r["id"] for r in only] == [sub["id"]]
+        kinds = client.get("/tasks?kinds=feature", headers=h).json()
+        assert [r["id"] for r in kinds] == [other]
+        f = client.get("/tasks/facets", headers=auth(alice)).json()
+        assert f["total"] == 3 and f["subtasks"] == 1
+        assert f["kind"] == {"bug": 2, "feature": 1}
+        assert f["lane"] == {"planned": 1}
+        # Free to take counts the plan and the backlog: the feature, not the in-progress bug.
+        assert f["claimable"] == 1
+        ready = client.get("/tasks/facets?ready=true", headers=auth(alice)).json()
+        assert ready["total"] == 1 and ready["lane"] == {"planned": 1}
+
+    def test_bad_comma_value_is_a_clear_422(self, client, auth, leader):
+        r = client.get("/tasks?priority=soon", headers=auth(leader))
+        assert r.status_code == 422 and "soon" in r.json()["detail"]
+
+
+def test_import_can_keep_a_task_out_of_the_pool(client, auth, leader, db_session):
+    [tid] = _import(client, auth(leader), _item("QX-30", pool=False))
+    assert db_session.get(Task, tid).pool is False
+
+
+def test_brief_and_refusal_code_for_agents(client, auth, leader, alice, db_session):
+    alice.sides = ["fe"]
+    db_session.commit()
+    [tid] = _import(client, auth(leader), _item("QX-40", side="be", criteria=["A", "B"]))
+    r = client.post(f"/tasks/{tid}/claim", headers=auth(alice), json={})
+    assert r.status_code == 403 and r.headers["X-Claim-Block"] == "other_side"
+    r = client.post(f"/tasks/{tid}/criteria/1/take", headers=auth(alice), json={})
+    assert r.headers["X-Claim-Block"] == "other_side"
+    sub = client.post(f"/tasks/{tid}/criteria/1/take", headers=auth(leader), json={}).json()
+    b = client.get(f"/tasks/{tid}/brief", headers=auth(alice)).json()
+    assert b["claim_block"] == "other_side" and b["claimable"] is False
+    assert b["parts"] == "1/2 taken"
+    assert b["criteria"][0].startswith(f"1. [open] [taken in HUB-{sub['id']} in_progress by @")
+    assert b["people"] and b["people"][0].endswith(f"part 1 via HUB-{sub['id']}")
+    rows = client.get("/tasks?side=be,fe", headers=auth(leader)).json()
+    assert {r["id"] for r in rows} == {tid, sub["id"]}
+
+
+class TestReviewFixes:
+    def test_part_of_restricted_assigned_task_stays_visible_to_its_taker(self, client, auth, leader, alice, db_session):
+        h = auth(leader)
+        t = client.post("/tasks", headers=h, json={"title": "Secret", "restricted": True, "status": "to_do",
+                                                   "assignee_1_id": alice.id, "side": "be"}).json()
+        client.post(f"/tasks/{t['id']}/criteria", headers=h, json={"text": "Part A"})
+        sub = client.post(f"/tasks/{t['id']}/criteria/1/take", headers=auth(alice), json={})
+        assert sub.status_code == 201, sub.text
+        sub = sub.json()
+        assert sub["restricted"] is True and sub["pool"] is False and sub["assignee_1_id"] == alice.id
+        assert client.get(f"/tasks/{sub['id']}", headers=auth(alice)).status_code == 200
+
+    def test_lost_race_on_a_part_is_a_clean_409(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        [tid] = _import(client, auth(leader), _item("QX-50", side="be", criteria=["A"]))
+        # Simulate the other request winning between the check and the write.
+        from app.routers import tasks as tasks_router
+        real = tasks_router._take_block
+        tasks_router._take_block = lambda *a, **k: None
+        try:
+            first = client.post(f"/tasks/{tid}/criteria/1/take", headers=auth(leader), json={})
+            assert first.status_code == 201
+            second = client.post(f"/tasks/{tid}/criteria/1/take", headers=auth(alice), json={})
+        finally:
+            tasks_router._take_block = real
+        assert second.status_code == 409 and second.headers["X-Claim-Block"] == "taken"
+        assert db_session.query(Task).filter(Task.parent_id == tid).count() == 1
+
+    def test_backlog_claim_cannot_be_planned_by_a_member(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        [tid] = _import(client, auth(leader), _item("QX-51", side="be"))
+        client.post(f"/tasks/{tid}/claim", headers=auth(alice), json={})
+        r = client.patch(f"/tasks/{tid}/status", headers=auth(alice), json={"status": "to_do"})
+        assert r.status_code == 200 and r.json()["status"] == "backlog"
+
+    def test_release_returns_the_task_to_its_lane(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        [tid] = _import(client, auth(leader), _item("QX-52", side="be"))
+        client.post(f"/tasks/{tid}/claim", headers=auth(alice), json={})
+        r = client.post(f"/tasks/{tid}/release", headers=auth(alice))
+        assert r.status_code == 200 and r.json()["status"] == "backlog" and r.json()["claimable"] is True
+        ready = client.get("/tasks?ready=true", headers=auth(alice)).json()
+        assert tid in [x["id"] for x in ready]
+
+    def test_whole_task_and_parts_do_not_overlap(self, client, auth, leader, alice, bob, db_session):
+        _member(alice, db_session)
+        _member(bob, db_session)
+        [tid, other] = _import(client, auth(leader), _item("QX-53", side="be", criteria=["A", "B"]),
+                               _item("QX-54", side="be", criteria=["C"]))
+        client.post(f"/tasks/{tid}/criteria/1/take", headers=auth(alice), json={})
+        r = client.post(f"/tasks/{tid}/claim", headers=auth(bob), json={})
+        assert r.status_code == 409 and r.headers["X-Claim-Block"] == "parts_taken"
+        client.post(f"/tasks/{other}/claim", headers=auth(alice), json={})
+        r = client.post(f"/tasks/{other}/criteria/1/take", headers=auth(bob), json={})
+        assert r.status_code == 409 and r.headers["X-Claim-Block"] == "claimed"
+
+    def test_dropped_part_shows_no_taker(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        [tid] = _import(client, auth(leader), _item("QX-55", side="be", criteria=["A"]))
+        sub = client.post(f"/tasks/{tid}/criteria/1/take", headers=auth(alice), json={}).json()
+        client.patch(f"/tasks/{sub['id']}/status", headers=auth(leader), json={"status": "dropped", "comment": "x"})
+        part = client.get(f"/tasks/{tid}", headers=auth(alice)).json()["criteria"][0]
+        assert part["subtask"] is None and part["can_take"] is True
+        again = client.post(f"/tasks/{tid}/criteria/1/take", headers=auth(alice), json={})
+        assert again.status_code == 201
+
+    def test_claimable_list_skips_your_own_claims(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        [a, b] = _import(client, auth(leader), _item("QX-56", side="be"), _item("QX-57", side="be"))
+        client.post(f"/tasks/{a}/claim", headers=auth(alice), json={})
+        rows = client.get("/tasks?claimable=true", headers=auth(alice)).json()
+        assert [r["id"] for r in rows] == [b]

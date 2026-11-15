@@ -241,6 +241,11 @@ class CriterionOut(ORMModel):
     checked_by: int | None
     checked_kind: ActorKind | None
     checked_at: datetime | None
+    # The subtask made when someone took this part, and whether the caller may take it.
+    subtask_id: int | None = None
+    subtask: "TaskRef | None" = None
+    can_take: bool = False
+    take_block_text: str | None = None
 
 
 class GitLinkOut(ORMModel):
@@ -487,6 +492,42 @@ class TaskOut(ORMModel):
     # Filled only by GET /tasks?awaiting_decision=true: the open questions
     # that make the task wait on the caller (or on a lead).
     decision_questions: list[DecisionQuestion] = []
+    # For the caller: can they claim it now, and if not, why (code + sentence).
+    claimable: bool = False
+    claim_block: str | None = None
+    claim_block_text: str | None = None
+    # planned = to_do, backlog = backlog; null for other statuses.
+    lane: str | None = None
+    # Everyone on the task, including people working through its subtasks.
+    people: list["PersonOn"] = []
+    parts_total: int = 0
+    parts_taken: int = 0
+
+
+class PersonOn(BaseModel):
+    handle: str
+    name: str
+    # assignee, claim (holds the task itself) or part (holds a subtask made from a part).
+    role: str
+    task_id: int
+    part: int | None = None
+
+
+class TakePartRequest(BaseModel):
+    ttl_hours: float | None = Field(default=None, gt=0)
+    agent: str | None = Field(default=None, max_length=80)
+
+
+class FacetsOut(BaseModel):
+    total: int
+    status: dict[str, int]
+    priority: dict[str, int]
+    kind: dict[str, int]
+    side: dict[str, int]
+    area: dict[str, int]
+    lane: dict[str, int]
+    claimable: int
+    subtasks: int
 
 
 class TaskDetailOut(TaskOut):
@@ -617,6 +658,8 @@ class ImportTask(BaseModel):
     # Effort on the hub's scale (1, 2, 3, 5, 8, 13); left out, new tasks get the default.
     points: int | None = None
     restricted: bool = False
+    # Pool tasks can be claimed by anyone on their side. Imports default to the pool.
+    pool: bool = True
     # Used on create only; a later import never moves the task.
     status: TaskStatus = TaskStatus.backlog
     # A question for a lead. It parks the task in needs_confirm until answered.
@@ -799,6 +842,13 @@ class TaskBrief(BaseModel):
     blocked_by: list[str] = []
     links: list[str] = []
     truncated: bool
+    # For the caller: can they claim it, and if not, why (code + sentence).
+    claimable: bool = False
+    claim_block: str | None = None
+    claim_block_text: str | None = None
+    # Everyone on it, e.g. "@sara part 2 via HUB-31", and "n/m taken" for its parts.
+    people: list[str] = []
+    parts: str = ""
 
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
@@ -1016,3 +1066,5 @@ TokenResponse.model_rebuild()
 
 TaskDetailOut.model_rebuild()
 ClaimOut.model_rebuild()
+CriterionOut.model_rebuild()
+TaskOut.model_rebuild()

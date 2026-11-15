@@ -38,10 +38,10 @@ from app.models import (
     CommentKind,
     Criterion,
     CriterionState,
+    Priority,
     DeployState,
     EventType,
     GitLink,
-    Role,
     Task,
     TaskDoc,
     TaskEvent,
@@ -62,6 +62,9 @@ from app.schemas import (
     CriterionOut,
     CriterionUpdate,
     DecisionQuestion,
+    FacetsOut,
+    PersonOn,
+    TakePartRequest,
     DeployUpdate,
     ImportRequest,
     ImportResult,
@@ -218,21 +221,37 @@ def _counts(task: Task) -> tuple[int, int, int]:
     return total, open_, questions
 
 
-def _out(task: Task, model=TaskOut, **extra):
+def _out(task: Task, model=TaskOut, user: User | None = None, **extra):
     row = model.model_validate(task)
     row.criteria_total, row.criteria_open, row.open_questions = _counts(task)
     row.blocked_by = task.open_blockers()
     row.children_total = len(task.children)
     row.children_open = sum(1 for c in task.children if c.status not in CLOSED_STATUSES)
+    row.lane = LANES.get(task.status)
+    row.people = _people_on(task)
+    row.parts_total = row.criteria_total
+    row.parts_taken = sum(1 for c in task.criteria if _part_holder(c) is not None)
+    if user is not None:
+        now = utcnow()
+        code, text = _claim_block(task, user, now)
+        mine = task.claim_is_live(now) and task.claimed_by == user.id
+        row.claimable = code is None and not mine
+        row.claim_block, row.claim_block_text = (None, None) if mine else (code, text)
     for key, value in extra.items():
         setattr(row, key, value)
     return row
 
 
-def _detail(task: Task) -> TaskDetailOut:
+def _detail(task: Task, user: User | None = None) -> TaskDetailOut:
     from app.routers.docs import doc_meta
 
-    row = _out(task, TaskDetailOut)
+    row = _out(task, TaskDetailOut, user)
+    if user is not None:
+        for out, criterion in zip(row.criteria, task.criteria):
+            holder = _part_holder(criterion)
+            out.subtask = _ref(holder) if holder is not None else None
+            out.take_block_text = _take_block(task, criterion, user)
+            out.can_take = out.take_block_text is None
     row.docs = [doc_meta(d) for d in task.docs]
     row.files = [FileOut.model_validate(f) for f in task.files if f.removed_at is None]
     row.context = [ContextOut.model_validate(c) for c in task.context]
@@ -258,13 +277,160 @@ SIDE_LABELS = {
     "infra": "Infra", "qa": "QA", "design": "Design", "other": "Other",
 }
 
+# Where a claimable task comes from: planned by a lead (to_do) or the backlog.
+LANES = {S.to_do: "planned", S.backlog: "backlog"}
+# A claim may start from these; claiming moves the task to in_progress.
+CLAIM_FROM = {S.backlog, S.to_do, S.in_progress}
+PRIORITY_RANK = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def _handle(u: User) -> str:
+    return u.handle or u.name
+
+
+def _claim_block(task: Task, user: User, now) -> tuple[str | None, str | None]:
+    """Why `user` cannot claim `task` now, as (code, sentence); (None, None) when they can."""
+    if user.is_read_only:
+        return "viewer", "Viewer accounts are read-only"
+    st = task.status
+    if st is S.proposed:
+        return "proposed", "A lead has not accepted this proposal yet"
+    if st is S.in_review:
+        return "in_review", "The work is in review"
+    if st is S.needs_confirm:
+        return "waiting_decision", "Waiting for a decision from a lead"
+    if st is S.blocked:
+        return "blocked", "Parked as blocked; read the task for the reason"
+    if st not in CLAIM_FROM:
+        return "closed", f"The task is {st.value.replace('_', ' ')}"
+    # Who may take it comes before what it waits on.
+    if not (user.is_lead or user.id in task.assignee_ids):
+        if not task.pool:
+            return "not_pool", "Assigned work: a lead assigns it or opens it to the pool"
+        if task.side is not None and user.sides and task.side.value not in user.sides:
+            sides = ", ".join(SIDE_LABELS.get(x, x) for x in user.sides)
+            return "other_side", f"{SIDE_LABELS[task.side.value]} work; your profile lists {sides}"
+    blockers = task.open_blockers()
+    if blockers:
+        return "blocked_by", "Waits for " + ", ".join(f"HUB-{b}" for b in blockers)
+    if task.claim_is_live(now) and task.claimed_by != user.id:
+        holder = _handle(task.claimer) if task.claimer else "someone"
+        return "claimed", f"Claimed by {holder} until {task.claim_expires_at:%Y-%m-%d %H:%M}Z"
+    if not user.is_lead and _parts_held_by_others(task, user, now):
+        return "parts_taken", "Others are working on its parts; take a free part instead"
+    return None, None
+
+
+def _parts_held_by_others(task: Task, user: User, now) -> bool:
+    for c in task.criteria:
+        sub = _part_holder(c)
+        if sub is not None and sub.status not in CLOSED_STATUSES and sub.claim_is_live(now) and sub.claimed_by != user.id:
+            return True
+    return False
+
+
+def _claim_origin(task: Task) -> TaskStatus | None:
+    """Where the current claim started the task from (backlog or to_do), if a claim started it."""
+    for e in sorted(task.events, key=lambda e: e.id or 0, reverse=True):
+        if e.event_type is EventType.status_changed and e.to_status is S.in_progress:
+            if (e.comment or "").startswith("Claimed") and e.from_status in (S.backlog, S.to_do):
+                return e.from_status
+            return None
+    return None
+
+
+def _part_holder(criterion: Criterion) -> Task | None:
+    """The live subtask made from this part, if someone took it (a dropped one frees it)."""
+    sub = criterion.subtask
+    if sub is None or sub.status is S.dropped:
+        return None
+    return sub
+
+
+def _take_block(task: Task, criterion: Criterion, user: User) -> str | None:
+    """Why `user` cannot take this part now; None when they can."""
+    if user.is_read_only:
+        return "Viewer accounts are read-only"
+    if user.is_bot:
+        return "Bots cannot take parts"
+    if task.parent_id is not None:
+        return "This is already a subtask; claim it instead"
+    if criterion.state is not CriterionState.open:
+        return f"This part is {criterion.state.value}"
+    holder = _part_holder(criterion)
+    if holder is not None:
+        who = _handle(holder.claimer) if holder.claim_is_live(utcnow()) and holder.claimer else None
+        return f"Taken in HUB-{holder.id}" + (f" by {who}" if who else "")
+    if task.status not in CLAIM_FROM:
+        code, text = _claim_block(task, user, utcnow())
+        return text or "The task cannot take new work now"
+    if not user.is_lead and task.claim_is_live(utcnow()) and task.claimed_by != user.id:
+        who = _handle(task.claimer) if task.claimer else "someone"
+        return f"{who} holds the whole task"
+    blockers = task.open_blockers()
+    if blockers:
+        return "Waits for " + ", ".join(f"HUB-{b}" for b in blockers)
+    if user.is_lead or user.id in task.assignee_ids:
+        return None
+    if not task.pool:
+        return "Assigned work: a lead assigns it or opens it to the pool"
+    if task.side is not None and user.sides and task.side.value not in user.sides:
+        sides = ", ".join(SIDE_LABELS.get(x, x) for x in user.sides)
+        return f"{SIDE_LABELS[task.side.value]} work; your profile lists {sides}"
+    return None
+
+
+def _people_on(task: Task) -> list[PersonOn]:
+    """Everyone on the task: its claim holder and assignees, then the people on its subtasks."""
+    now = utcnow()
+    out: list[PersonOn] = []
+    seen: set[tuple[int, int]] = set()
+
+    def add(u: User | None, role: str, task_id: int, part: int | None = None) -> None:
+        if u is None or (u.id, task_id) in seen:
+            return
+        seen.add((u.id, task_id))
+        out.append(PersonOn(handle=_handle(u), name=u.name, role=role, task_id=task_id, part=part))
+
+    if task.claim_is_live(now):
+        add(task.claimer, "claim", task.id)
+    add(task.assignee_1, "assignee", task.id)
+    add(task.assignee_2, "assignee", task.id)
+    part_of = {c.subtask_id: c.n for c in task.criteria if c.subtask_id}
+    for child in task.children:
+        if child.status is S.dropped:
+            continue
+        part = part_of.get(child.id)
+        if child.claim_is_live(now):
+            add(child.claimer, "part", child.id, part)
+        add(child.assignee_1, "part", child.id, part)
+        add(child.assignee_2, "part", child.id, part)
+    return out
+
+
+def _mark_part_done(db: Session, auth: Auth, task: Task) -> None:
+    """A subtask made from a part closes as done: mark that part met on the parent."""
+    parent = task.parent
+    if parent is None:
+        return
+    for c in parent.criteria:
+        if c.subtask_id == task.id and c.state is CriterionState.open:
+            c.state = CriterionState.met
+            c.evidence = f"Done in HUB-{task.id}"
+            c.checked_by = auth.user.id
+            c.checked_kind = auth.kind
+            c.checked_at = utcnow()
+            record(db, auth, task_id=parent.id, event_type=EventType.criterion_changed,
+                   data={"n": c.n, "state": ["open", "met"], "via": task.id})
+            _touch(parent)
+
 
 def _start_parent(db: Session, auth: Auth, task: Task) -> None:
     """The first subtask to start starts its parent too."""
     parent = task.parent
-    if parent is not None and parent.status is S.to_do:
+    if parent is not None and parent.status in (S.to_do, S.backlog):
         record(db, auth, task_id=parent.id, event_type=EventType.status_changed,
-               from_status=S.to_do, to_status=S.in_progress, comment=f"Subtask #{task.id} started")
+               from_status=parent.status, to_status=S.in_progress, comment=f"Subtask #{task.id} started")
         parent.status = S.in_progress
         _touch(parent)
 
@@ -474,7 +640,7 @@ def create_task(
             if not _can_see(existing, user):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                                     detail="An open task already tracks this fingerprint")
-            out = _detail(_get_task_or_404(db, existing.id))
+            out = _detail(_get_task_or_404(db, existing.id), auth.user)
             out.duplicate_of_existing = True
             response.status_code = status.HTTP_200_OK  # nothing new was created
             return out
@@ -594,7 +760,7 @@ def create_task(
     notify(db, auth, users=by_handles(db, mentioned_handles(task.description)), task=task,
            kind=NotifyKind.mention, text=task.description)
     db.commit()
-    out = _detail(_get_task_or_404(db, task.id))
+    out = _detail(_get_task_or_404(db, task.id), auth.user)
     out.similar = similar_out.matches
     out.suggested_areas = similar_out.suggested_areas
     out.area_auto = area_auto
@@ -635,13 +801,117 @@ def list_tasks(
     ),
     sort: str = Query(default="created", pattern=r"^(created|updated)$", description="Newest created or newest changed first"),
     limit: int = Query(default=500, ge=1, le=1000, description="Used only when neither page nor page_size is sent"),
+    lane: str | None = Query(default=None, pattern=r"^(planned|backlog)$",
+                             description="planned = to_do, backlog = backlog"),
+    priority: str | None = Query(default=None, max_length=60, description="Comma list, for example urgent,high"),
+    kinds: str | None = Query(default=None, max_length=120, description="Comma list, for example bug,feature"),
+    subtasks: str = Query(default="all", pattern=r"^(all|top|only)$",
+                          description="top hides subtasks, only shows just subtasks"),
+    claimable: bool = Query(default=False, description="Only tasks you can claim now"),
 ) -> list[TaskOut]:
     """Tasks you can see, newest first. Send `page` and/or `page_size` to read a
-    page at a time; the totals come back in the X-Total-* headers."""
+    page at a time; the totals come back in the X-Total-* headers.
+
+    `ready=true` lists what you can claim now, from the plan (to_do) and the
+    backlog: planned first, then by priority, then oldest first."""
     if not auth.has("tasks:read"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This API token lacks the 'tasks:read' scope")
     user = auth.user
     now = utcnow()
+    stmt = _filtered(
+        db, user, now, status_filter=status_filter, statuses=statuses, assignee_id=assignee_id, side=side,
+        mine=mine, ready=ready, q=q, include_closed=include_closed, created_kind=created_kind,
+        created_by=created_by, from_bots=from_bots, kind=kind, parent_id=parent_id, pool=pool,
+        my_sides=my_sides, area=area, lane=lane, priority=priority, kinds=kinds, subtasks=subtasks,
+    )
+    asked_ids = _asked_ids(db, user, awaiting_decision, to)
+    if awaiting_decision:
+        stmt = stmt.where(Task.id.in_(
+            select(Comment.task_id).where(
+                Comment.kind == CommentKind.question,
+                Comment.resolved_at.is_(None),
+                Comment.to_user_id.in_(asked_ids),
+            )
+        ))
+
+    # The id breaks ties, so two pages never share a row.
+    order = (Task.updated_at.desc(), Task.id.desc()) if sort == "updated" else (Task.created_at.desc(), Task.id.desc())
+    rows_stmt = stmt.options(selectinload(Task.criteria), selectinload(Task.comments),
+                             selectinload(Task.children), selectinload(Task.incoming_links)).order_by(*order)
+
+    if tag or ready or claimable:
+        # Tags are a JSON list, blockers follow links and the claim rules need the
+        # person: all three are checked in Python.
+        matched = [
+            t for t in db.scalars(rows_stmt).unique()
+            if (not tag or tag in (t.tags or []))
+            and (not (ready or claimable) or _claim_block(t, user, now)[0] is None)
+            and (not (ready or claimable) or not (t.claim_is_live(now) and t.claimed_by == user.id))
+        ]
+        if ready:
+            matched.sort(key=lambda t: (t.status is not S.to_do, PRIORITY_RANK.get(t.priority.value, 9), t.created_at, t.id))
+        if paging.on:
+            tasks = paging.slice(matched, response, X_Total_Points=sum(t.points or 0 for t in matched))
+        else:
+            tasks = matched[:limit]
+    elif paging.on:
+        sub = stmt.with_only_columns(Task.id, Task.points).order_by(None).subquery()
+        total, points = db.execute(
+            select(func.count(), func.coalesce(func.sum(sub.c.points), 0)).select_from(sub)
+        ).one()
+        paging.set_headers(response, total, X_Total_Points=points)
+        tasks = list(db.scalars(paging.window(rows_stmt)).unique())
+    else:
+        tasks = list(db.scalars(rows_stmt.limit(limit)).unique())
+
+    rows = [_out(t, user=user) for t in tasks]
+    if awaiting_decision:
+        for row, task in zip(rows, tasks):
+            row.decision_questions = [
+                DecisionQuestion(
+                    comment_id=c.id,
+                    to=(c.to_user.handle or c.to_user.name) if c.to_user else None,
+                    author=_who(c),
+                    text=c.body[:2_000],
+                    at=c.created_at,
+                )
+                for c in task.comments
+                if c.kind is CommentKind.question and c.resolved_at is None and c.to_user_id in asked_ids
+            ]
+    return rows
+
+
+def _comma(value: str | None, enum_cls, what: str) -> list:
+    out = []
+    for name in (value or "").split(","):
+        if not name.strip():
+            continue
+        try:
+            out.append(enum_cls(name.strip()))
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"{what}: no value '{name.strip()}'") from None
+    return out
+
+
+def _asked_ids(db: Session, user: User, awaiting_decision: bool, to: str | None) -> list[int]:
+    if not awaiting_decision:
+        return []
+    if to == "leads":
+        if not user.is_lead:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Only a lead lists the questions asked of every lead")
+        return sorted({user.id, *(u.id for u in leads(db))})
+    return [user.id]
+
+
+def _filtered(
+    db: Session, user: User, now, *, status_filter=None, statuses=None, assignee_id=None, side=None,
+    mine=False, ready=False, q=None, include_closed=True, created_kind=None, created_by=None,
+    from_bots=False, kind=None, parent_id=None, pool=None, my_sides=False, area=None, lane=None,
+    priority=None, kinds=None, subtasks="all",
+):
+    """The SQL part of the task filters, shared by the list and the facets."""
     stmt = select(Task)
     visible = _visible_filter(user)
     if visible is not None:
@@ -654,12 +924,25 @@ def list_tasks(
         stmt = stmt.where(or_(Task.assignee_1_id == assignee_id, Task.assignee_2_id == assignee_id))
 
     if ready:
+        # Free work from the plan and the backlog; the claim rules finish the check in Python.
         stmt = stmt.where(
-            Task.status == S.to_do,
+            Task.status.in_([S.to_do, S.backlog]),
             or_(Task.claimed_by.is_(None), Task.claim_expires_at <= now),
         )
         if not user.is_lead:
             stmt = stmt.where(or_(mine_filter, Task.pool.is_(True)))
+    if lane:
+        stmt = stmt.where(Task.status == (S.to_do if lane == "planned" else S.backlog))
+    wanted_priorities = _comma(priority, Priority, "priority")
+    if wanted_priorities:
+        stmt = stmt.where(Task.priority.in_(wanted_priorities))
+    wanted_kinds = _comma(kinds, TaskKind, "kinds")
+    if wanted_kinds:
+        stmt = stmt.where(Task.kind.in_(wanted_kinds))
+    if subtasks == "top":
+        stmt = stmt.where(Task.parent_id.is_(None))
+    elif subtasks == "only":
+        stmt = stmt.where(Task.parent_id.is_not(None))
 
     wanted_statuses: list[TaskStatus] = []
     for name in (statuses or "").split(","):
@@ -677,7 +960,8 @@ def list_tasks(
     elif not include_closed:
         stmt = stmt.where(Task.status.not_in(list(CLOSED_STATUSES)))
     if side:
-        stmt = stmt.where(Task.side == side)
+        wanted_sides = [x.strip() for x in side.split(",") if x.strip()]
+        stmt = stmt.where(Task.side.in_(wanted_sides))
     if created_kind is not None:
         stmt = stmt.where(Task.created_kind == created_kind)
     if created_by is not None:
@@ -703,63 +987,82 @@ def list_tasks(
         if by_id:
             found.append(Task.id == int(by_id.group(1)))
         stmt = stmt.where(or_(*found))
+    return stmt
 
-    asked_ids: list[int] = []
+
+@router.get("/facets", response_model=FacetsOut)
+def facets(
+    auth: AuthCtx,
+    db: DbSession,
+    status_filter: TaskStatus | None = None,
+    statuses: str | None = Query(default=None, max_length=200),
+    assignee_id: int | None = None,
+    side: str | None = None,
+    tag: str | None = None,
+    mine: bool = False,
+    ready: bool = False,
+    q: str | None = Query(default=None, max_length=100),
+    include_closed: bool = True,
+    kind: TaskKind | None = None,
+    parent_id: int | None = None,
+    pool: bool | None = None,
+    my_sides: bool = False,
+    area: str | None = Query(default=None, max_length=60),
+    created_kind: ActorKind | None = None,
+    created_by: int | None = None,
+    from_bots: bool = False,
+    awaiting_decision: bool = False,
+    to: str | None = Query(default=None, pattern=r"^(me|leads)$"),
+    lane: str | None = Query(default=None, pattern=r"^(planned|backlog)$"),
+    priority: str | None = Query(default=None, max_length=60),
+    kinds: str | None = Query(default=None, max_length=120),
+    subtasks: str = Query(default="all", pattern=r"^(all|top|only)$"),
+    claimable: bool = False,
+) -> FacetsOut:
+    """Counts for the same filters as GET /tasks: by status, priority, kind,
+    side, area and lane, plus how many you can claim. For filter chips and
+    short agent summaries."""
+    if not auth.has("tasks:read"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This API token lacks the 'tasks:read' scope")
+    user = auth.user
+    now = utcnow()
+    stmt = _filtered(
+        db, user, now, status_filter=status_filter, statuses=statuses, assignee_id=assignee_id, side=side,
+        mine=mine, ready=ready, q=q, include_closed=include_closed, kind=kind, parent_id=parent_id,
+        pool=pool, my_sides=my_sides, area=area, lane=lane, priority=priority, kinds=kinds, subtasks=subtasks,
+        created_kind=created_kind, created_by=created_by, from_bots=from_bots,
+    )
+    stmt = stmt.options(selectinload(Task.criteria), selectinload(Task.children), selectinload(Task.incoming_links))
     if awaiting_decision:
-        if to == "leads":
-            if not user.is_lead:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                                    detail="Only a lead lists the questions asked of every lead")
-            asked_ids = sorted({user.id, *(u.id for u in leads(db))})
-        else:
-            asked_ids = [user.id]
-        stmt = stmt.where(Task.id.in_(
-            select(Comment.task_id).where(
-                Comment.kind == CommentKind.question,
-                Comment.resolved_at.is_(None),
-                Comment.to_user_id.in_(asked_ids),
-            )
-        ))
+        asked = _asked_ids(db, user, awaiting_decision, to)
+        stmt = stmt.where(Task.id.in_(select(Comment.task_id).where(
+            Comment.kind == CommentKind.question, Comment.resolved_at.is_(None), Comment.to_user_id.in_(asked),
+        )))
+    out = FacetsOut(total=0, status={}, priority={}, kind={}, side={}, area={}, lane={}, claimable=0, subtasks=0)
 
-    # The id breaks ties, so two pages never share a row.
-    order = (Task.updated_at.desc(), Task.id.desc()) if sort == "updated" else (Task.created_at.desc(), Task.id.desc())
-    rows_stmt = stmt.options(selectinload(Task.criteria), selectinload(Task.comments)).order_by(*order)
+    def bump(bucket: dict, key) -> None:
+        if key is not None:
+            bucket[key] = bucket.get(key, 0) + 1
 
-    if tag or ready:
-        # Tags are a JSON list and blockers follow links: both are checked in Python.
-        matched = [
-            t for t in db.scalars(rows_stmt).unique()
-            if (not tag or tag in (t.tags or [])) and (not ready or not t.open_blockers())
-        ]
-        if paging.on:
-            tasks = paging.slice(matched, response, X_Total_Points=sum(t.points or 0 for t in matched))
-        else:
-            tasks = matched[:limit]
-    elif paging.on:
-        sub = stmt.with_only_columns(Task.id, Task.points).order_by(None).subquery()
-        total, points = db.execute(
-            select(func.count(), func.coalesce(func.sum(sub.c.points), 0)).select_from(sub)
-        ).one()
-        paging.set_headers(response, total, X_Total_Points=points)
-        tasks = list(db.scalars(paging.window(rows_stmt)).unique())
-    else:
-        tasks = list(db.scalars(rows_stmt.limit(limit)).unique())
-
-    rows = [_out(t) for t in tasks]
-    if awaiting_decision:
-        for row, task in zip(rows, tasks):
-            row.decision_questions = [
-                DecisionQuestion(
-                    comment_id=c.id,
-                    to=(c.to_user.handle or c.to_user.name) if c.to_user else None,
-                    author=_who(c),
-                    text=c.body[:2_000],
-                    at=c.created_at,
-                )
-                for c in task.comments
-                if c.kind is CommentKind.question and c.resolved_at is None and c.to_user_id in asked_ids
-            ]
-    return rows
+    for t in db.scalars(stmt).unique():
+        if tag and tag not in (t.tags or []):
+            continue
+        free = _claim_block(t, user, now)[0] is None and not (t.claim_is_live(now) and t.claimed_by == user.id)
+        if (ready or claimable) and not free:
+            continue
+        if ready and t.status not in LANES:
+            continue
+        out.total += 1
+        # "Free to take" counts what the ready list shows: the plan and the backlog.
+        out.claimable += free and t.status in LANES
+        out.subtasks += t.parent_id is not None
+        bump(out.status, t.status.value)
+        bump(out.priority, t.priority.value)
+        bump(out.kind, t.kind.value)
+        bump(out.side, t.side.value if t.side else "none")
+        bump(out.area, t.area.slug if t.area else "none")
+        bump(out.lane, LANES.get(t.status))
+    return out
 
 
 @router.get("/inbox", response_model=list[InboxItem])
@@ -931,7 +1234,7 @@ def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> 
         task = Task(
             title=title, description=description, priority=item.priority, status=item.status,
             created_by=auth.user.id, side=item.side, tags=item.tags or [], areas=[],
-            restricted=item.restricted, pool=False, created_kind=auth.kind, created_agent=auth.agent,
+            restricted=item.restricted, pool=item.pool, created_kind=auth.kind, created_agent=auth.agent,
             kind=item.kind, fingerprint=fingerprint, area_id=area.id if area else None,
         )
         if item.points is not None:
@@ -951,7 +1254,7 @@ def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> 
     wanted: dict[str, object] = {"title": title}
     if "description" in sent:
         wanted["description"] = description
-    for field in ("kind", "priority", "side", "restricted", "points"):
+    for field in ("kind", "priority", "side", "restricted", "points", "pool"):
         if field in sent and getattr(item, field) is not None:
             wanted[field] = getattr(item, field)
     if "tags" in sent:
@@ -1127,7 +1430,7 @@ def split_task(
            data={"split_into": {s.value: c.id for s, c in by_side.items()}})
     _touch(parent)
     db.commit()
-    return _detail(_get_task_or_404(db, parent.id))
+    return _detail(_get_task_or_404(db, parent.id), auth.user)
 
 
 @router.post("/{task_id}/links", response_model=TaskDetailOut, status_code=status.HTTP_201_CREATED)
@@ -1172,7 +1475,7 @@ def add_link(
                data={"kind": payload.kind.value, "from": task.id})
         _touch(task)
         db.commit()
-    return _detail(_get_task_or_404(db, task.id))
+    return _detail(_get_task_or_404(db, task.id), auth.user)
 
 
 @router.delete("/{task_id}/links/{link_id}", response_model=TaskDetailOut)
@@ -1195,14 +1498,14 @@ def remove_link(
     record(db, auth, task_id=task.id, event_type=EventType.unlinked, data=data)
     _touch(task)
     db.commit()
-    return _detail(_get_task_or_404(db, task.id))
+    return _detail(_get_task_or_404(db, task.id), auth.user)
 
 
 @router.get("/{task_id}", response_model=TaskDetailOut)
 def get_task(task_id: int, auth: AuthCtx, db: DbSession) -> TaskDetailOut:
     task = _get_task_or_404(db, task_id)
     _assert_visible(task, auth.user)
-    return _detail(task)
+    return _detail(task, auth.user)
 
 
 def _size(n: int) -> str:
@@ -1246,7 +1549,13 @@ def brief(task_id: int, auth: AuthCtx, db: DbSession) -> TaskBrief:
     for c in task.criteria:
         text, cut = _cut(c.text, 140)
         truncated |= cut
-        criteria.append(f"{c.n}. [{c.state.value}] {text}")
+        holder = _part_holder(c)
+        if holder is not None:
+            who = _handle(holder.claimer) if holder.claim_is_live(utcnow()) and holder.claimer else None
+            taken = f" [taken in HUB-{holder.id} {holder.status.value}" + (f" by @{who}" if who else "") + "]"
+        else:
+            taken = ""
+        criteria.append(f"{c.n}. [{c.state.value}]{taken} {text}")
 
     questions = []
     for c in task.comments:
@@ -1287,6 +1596,12 @@ def brief(task_id: int, auth: AuthCtx, db: DbSession) -> TaskBrief:
     ]
     files = [f"{f.name} ({_size(f.size)})" for f in task.files if f.removed_at is None][:8]
     truncated |= len(task.docs) > 8 or len(task.context) > 8
+    now = utcnow()
+    code, text = _claim_block(task, auth.user, now)
+    if task.claim_is_live(now) and task.claimed_by == auth.user.id:
+        claimable, code, text = False, None, None
+    else:
+        claimable = code is None
     return TaskBrief(
         id=task.id,
         title=task.title,
@@ -1315,6 +1630,15 @@ def brief(task_id: int, auth: AuthCtx, db: DbSession) -> TaskBrief:
         blocked_by=[f"#{b}" for b in task.open_blockers()],
         links=[link.label for link in _links_out(task)][:10],
         truncated=truncated,
+        claimable=claimable,
+        claim_block=code,
+        claim_block_text=text,
+        people=[
+            f"@{p.handle} " + ("whole task" if p.role == "claim" else "assigned" if p.role == "assignee"
+                                else (f"part {p.part} " if p.part else "") + f"via HUB-{p.task_id}")
+            for p in _people_on(task)
+        ][:12],
+        parts=f"{sum(1 for c in task.criteria if _part_holder(c) is not None)}/{len(task.criteria)} taken",
     )
 
 
@@ -1399,7 +1723,7 @@ def update_task(
         record(db, auth, task_id=task.id, event_type=EventType.field_changed, data=changes)
         _touch(task)
     db.commit()
-    return _detail(_get_task_or_404(db, task.id))
+    return _detail(_get_task_or_404(db, task.id), auth.user)
 
 
 def _plain(value):
@@ -1435,6 +1759,10 @@ def change_status(
 
     from_status = task.status
     target = payload.status
+    if (from_status is S.in_progress and target is S.to_do and not user.is_lead
+            and _claim_origin(task) is S.backlog):
+        # Planning is a lead's call: work claimed from the backlog goes back there.
+        target = S.backlog
     comment = lint.clean(payload.comment, field="comment")
     now = utcnow()
 
@@ -1506,6 +1834,8 @@ def change_status(
 
     if target is S.in_progress:
         _start_parent(db, auth, task)
+    if target is S.done:
+        _mark_part_done(db, auth, task)
     if target in CLOSED_STATUSES:
         db.flush()
         _tell_leads_when_family_closes(db, auth, task)
@@ -1517,7 +1847,7 @@ def change_status(
     elif from_status is S.in_review and target is S.in_progress:
         notify(db, auth, users=workers, task=task, kind=NotifyKind.rejected, text=comment)
     db.commit()
-    return _detail(_get_task_or_404(db, task.id))
+    return _detail(_get_task_or_404(db, task.id), auth.user)
 
 
 @router.patch("/{task_id}/assign", response_model=TaskDetailOut)
@@ -1547,7 +1877,7 @@ def assign_task(
     new_people = [i for i in task.assignee_ids if i not in before]
     notify(db, auth, users=_people(db, new_people), task=task, kind=NotifyKind.assigned, text=task.summary or task.description)
     db.commit()
-    return _detail(_get_task_or_404(db, task.id))
+    return _detail(_get_task_or_404(db, task.id), auth.user)
 
 
 @router.post("/{task_id}/reject", response_model=TaskDetailOut)
@@ -1581,7 +1911,7 @@ def reject_task(
     notify(db, auth, users=_people(db, task.assignee_ids), task=task,
            kind=NotifyKind.rejected, text=payload.comment)
     db.commit()
-    return _detail(_get_task_or_404(db, task.id))
+    return _detail(_get_task_or_404(db, task.id), auth.user)
 
 
 # --- claims -------------------------------------------------------------------
@@ -1600,32 +1930,38 @@ def claim_task(
     _assert_visible(task, user)
     _assert_not_viewer(user)
 
-    if task.status not in {S.to_do, S.in_progress}:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Only to_do or in_progress tasks can be claimed (task is '{task.status.value}')",
-        )
-    if not user.is_lead and user.id not in task.assignee_ids and not task.pool:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can claim tasks assigned to you, or pool tasks",
-        )
-    if (
-        task.pool and not user.is_lead and user.id not in task.assignee_ids
-        and task.side is not None and user.sides and task.side.value not in user.sides
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"This pool task is {SIDE_LABELS[task.side.value]} work; your profile lists {', '.join(user.sides)}",
-        )
-    _refuse_if_blocked(task)
+    _refuse_claim(task, user)
+    out, warnings = _claim(db, auth, task, payload.agent, payload.ttl_hours, payload.branch)
+    db.commit()
+    return _out(_get_task_or_404(db, task.id), ClaimOut, user, warnings=warnings)
 
-    agent = auth.agent if auth.kind is ActorKind.agent else (payload.agent or "").strip() or None
+
+def _refuse_claim(task: Task, user: User) -> None:
+    """Raise with the reason when `user` may not claim `task`; a live claim of
+    someone else is left to the race-safe update in `_claim`."""
+    code, text = _claim_block(task, user, utcnow())
+    if code is None or code == "claimed":
+        return
+    forbidden = {"viewer", "not_pool", "other_side"}
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN if code in forbidden else status.HTTP_409_CONFLICT,
+        detail=text,
+        headers={"X-Claim-Block": code},
+    )
+
+
+def _claim(db: Session, auth: Auth, task: Task, agent_name: str | None, ttl_hours: float | None,
+           branch: str | None):
+    """Take or renew the lease; moves a backlog or to_do task to in_progress.
+    Does not commit. Returns (task, warnings)."""
+    user = auth.user
+    payload_ttl = ttl_hours
+    agent = auth.agent if auth.kind is ActorKind.agent else (agent_name or "").strip() or None
     now = utcnow()
-    hours = min(payload.ttl_hours or settings.claim_default_hours, settings.claim_max_hours)
+    hours = min(payload_ttl or settings.claim_default_hours, settings.claim_max_hours)
     expires = now + timedelta(hours=hours)
     renewing = task.claimed_by == user.id and task.claim_agent == agent and task.claim_is_live(now)
-    if renewing and payload.ttl_hours is None and task.claim_expires_at > expires:
+    if renewing and payload_ttl is None and task.claim_expires_at > expires:
         # A plain renew keeps a longer lease the holder asked for earlier.
         expires = task.claim_expires_at
 
@@ -1648,7 +1984,7 @@ def claim_task(
             claimed_by=user.id,
             claim_agent=agent,
             claim_expires_at=expires,
-            claim_branch=payload.branch or Task.claim_branch,
+            claim_branch=branch or Task.claim_branch,
             version=Task.version + 1,
             updated_at=now,
         )
@@ -1659,6 +1995,7 @@ def claim_task(
         holder = task.claimer.handle or task.claimer.name if task.claimer else "someone"
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
+            headers={"X-Claim-Block": "claimed"},
             detail=(
                 f"Claimed by {holder}/{task.claim_agent or 'web'} until "
                 f"{task.claim_expires_at:%Y-%m-%d %H:%M}Z. Pick other work."
@@ -1667,9 +2004,10 @@ def claim_task(
     db.refresh(task)
 
     warnings: list[str] = []
-    if task.status is S.to_do:
+    if task.status in (S.to_do, S.backlog):
         record(db, auth, task_id=task.id, event_type=EventType.status_changed,
-               from_status=S.to_do, to_status=S.in_progress, comment="Claimed", timestamp=now)
+               from_status=task.status, to_status=S.in_progress,
+               comment="Claimed" if task.status is S.to_do else "Claimed from the backlog", timestamp=now)
         task.status = S.in_progress
         _start_parent(db, auth, task)
 
@@ -1711,9 +2049,95 @@ def claim_task(
                 warnings.append(
                     f"Task {other.id} is claimed and touches the same area: {', '.join(sorted(shared))}"
                 )
+    return task, warnings
 
+
+@router.post("/{task_id}/criteria/{n}/take", response_model=ClaimOut, status_code=status.HTTP_201_CREATED)
+def take_part(
+    task_id: int,
+    n: int,
+    payload: TakePartRequest,
+    db: DbSession,
+    auth: Auth = Depends(require_scope("claims")),
+) -> ClaimOut:
+    """Take one part (acceptance criterion) of a task: the hub makes a subtask
+    for it on the parent's side, links the part to it and claims it for you.
+    When that subtask is approved as done, the part is marked met."""
+    parent = _get_task_or_404(db, task_id)
+    user = auth.user
+    _assert_visible(parent, user)
+    criterion = next((c for c in parent.criteria if c.n == n), None)
+    if criterion is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No part {n} on this task")
+    reason = _take_block(parent, criterion, user)
+    if reason is not None:
+        code = ("taken" if reason.startswith("Taken in") else "claimed" if "holds the whole task" in reason
+                else "waiting_decision" if "decision" in reason
+                else "other_side" if "your profile lists" in reason else "not_pool" if "a lead assigns" in reason
+                else "blocked_by" if reason.startswith("Waits for") else "refused")
+        forbidden = user.is_read_only or user.is_bot or code in ("other_side", "not_pool")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN if forbidden else status.HTTP_409_CONFLICT,
+                            detail=reason, headers={"X-Claim-Block": code})
+
+    now = utcnow()
+    text = " ".join(criterion.text.split())
+    child = Task(
+        title=(text if len(text) <= 200 else text[:199] + "…"),
+        description=lint.clean(
+            f"Part {n} of HUB-{parent.id} ({parent.title}).\n\n{criterion.text}\n\n"
+            "Read the parent task first: its description holds the context, the evidence and the fix.",
+            field="description",
+        ),
+        priority=parent.priority,
+        points=min(parent.points or 1, 3),
+        status=S.to_do,
+        due_date=parent.due_date,
+        created_by=user.id,
+        side=parent.side,
+        tags=list(parent.tags or []),
+        areas=list(parent.areas or []),
+        area_id=parent.area_id,
+        restricted=parent.restricted,
+        pool=parent.pool,
+        # Restricted or assigned work stays with the taker: they can open it, and a lapsed
+        # claim does not hand it to the whole side.
+        assignee_1_id=user.id if (parent.restricted or not parent.pool) else None,
+        kind=parent.kind,
+        created_kind=auth.kind,
+        created_agent=auth.agent,
+        parent_id=parent.id,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(child)
+    db.flush()
+    db.add(Criterion(task_id=child.id, n=1, text=criterion.text))
+    record(db, auth, task_id=child.id, event_type=EventType.created, to_status=S.to_do, timestamp=now,
+           data={"part_of": parent.id, "part": n})
+    # The part is free when it has no subtask or only a dropped one; link it only if it still is.
+    previous = criterion.subtask_id if (criterion.subtask is not None and criterion.subtask.status is S.dropped) else None
+    won = db.execute(
+        update(Criterion)
+        .where(
+            Criterion.id == criterion.id,
+            Criterion.subtask_id.is_(None) if previous is None else Criterion.subtask_id == previous,
+        )
+        .values(subtask_id=child.id)
+        .execution_options(synchronize_session=False)
+    )
+    if won.rowcount == 0:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Someone took this part a moment ago",
+                            headers={"X-Claim-Block": "taken"})
+    db.expire(criterion)
+    record(db, auth, task_id=parent.id, event_type=EventType.field_changed, timestamp=now,
+           data={"part_taken": {"n": n, "subtask": child.id}})
+    _touch(parent)
+    db.flush()
+    db.refresh(child)
+    _, warnings = _claim(db, auth, child, payload.agent, payload.ttl_hours, None)
     db.commit()
-    return _out(_get_task_or_404(db, task.id), ClaimOut, warnings=warnings)
+    return _out(_get_task_or_404(db, child.id), ClaimOut, user, warnings=warnings)
 
 
 @router.post("/{task_id}/release", response_model=TaskDetailOut)
@@ -1726,18 +2150,24 @@ def release_task(
     user = auth.user
     _assert_visible(task, user)
     if task.claimed_by is None:
-        return _detail(task)
+        return _detail(task, auth.user)
     if task.claimed_by != user.id and not user.is_lead:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the claim holder or a leader can release this claim",
         )
     data = {"agent": task.claim_agent, "holder": task.claimed_by}
+    origin = _claim_origin(task) if task.status is S.in_progress else None
+    if origin is not None and not any(c.status not in CLOSED_STATUSES for c in task.children):
+        # Released work goes back where the claim took it from, so it is free to take again.
+        record(db, auth, task_id=task.id, event_type=EventType.status_changed,
+               from_status=S.in_progress, to_status=origin, comment="Released")
+        task.status = origin
     _clear_claim(task)
     _touch(task)
     record(db, auth, task_id=task.id, event_type=EventType.released, data=data)
     db.commit()
-    return _detail(_get_task_or_404(db, task.id))
+    return _detail(_get_task_or_404(db, task.id), auth.user)
 
 
 # --- comments -----------------------------------------------------------------
@@ -2075,4 +2505,4 @@ def set_deploy_state(
         data={"from": old.value, "to": payload.state.value, "note": task.deploy_note},
     )
     db.commit()
-    return _detail(_get_task_or_404(db, task.id))
+    return _detail(_get_task_or_404(db, task.id), auth.user)

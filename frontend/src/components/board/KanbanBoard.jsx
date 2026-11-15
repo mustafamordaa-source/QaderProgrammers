@@ -41,6 +41,7 @@ export default function KanbanBoard({
   onMove,
   onClaim = null,
   claimingId = null,
+  showLane = false,
   selectedIds = null,
   onSelect = null,
   onSelectMany = null,
@@ -147,6 +148,7 @@ export default function KanbanBoard({
       onSelect: selectable ? onSelect : null,
       onClaim,
       claiming: claimingId === task.id,
+      showLane,
     }
   }
 

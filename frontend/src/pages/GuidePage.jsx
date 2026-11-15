@@ -282,7 +282,7 @@ const SECTIONS = [
         type: 'list',
         items: [
           'Claim a task before you start: the Claim button on the task, or `qhub claim`.',
-          'You can claim to_do and in_progress tasks that are assigned to you, and pool tasks for your sides. Leads can claim any to_do or in_progress task.',
+          'You can claim backlog and to_do tasks that are assigned to you, and pool tasks for your sides; claiming moves them to in_progress. Renew a claim in in_progress. Leads can claim any of them. See Taking work below.',
           'A lease lasts 2 hours by default and 8 at most. Claim again to renew it.',
           'A task holds one claim at a time, by one person and one agent name. A second agent gets 409, even when it runs under your account. Give each agent session its own name and one task at a time.',
           'The hub warns when you go over your WIP limit or when another claimed task shares an area.',
@@ -325,6 +325,63 @@ const SECTIONS = [
         text: 'Summary: Added CSV export to the board. Leads get an Export button, and the new endpoint returns one row per task with Arabic and English headers.\nBranch / PR: feat/HUB-12-csv-export, PR 2480\nCommits: 1a2b3c4d5, 6e7f8a9b0\nChecks run: pytest tests/test_export.py: 6 passed; npm run check:routes: ok\nLeft: nothing\nQuestions: none\nDeploy: none yet; staging with the next merge',
       },
       { type: 'code', text: 'qhub handback 12 --file handback.md\nqhub status 12 in_review' },
+    ],
+  },
+  {
+    id: 'taking',
+    title: 'Taking work',
+    blocks: [
+      {
+        type: 'p',
+        text: 'Pick work up yourself instead of waiting to be assigned. A card you can start shows a Take button. Press it and the task moves to In progress with your claim on it. Imported tasks are pool tasks, so anyone on that side can take them.',
+      },
+      { type: 'h3', text: 'Claim from Backlog or To do' },
+      {
+        type: 'list',
+        items: [
+          'Take works on tasks in Backlog and in To do. To do holds the planned work, so take from there first.',
+          'Open a task and its Claim box shows the same Take button, with an optional branch name.',
+          'When you cannot take a task, the card shows a small lock instead. Point at it (or open the task) to read why.',
+        ],
+      },
+      { type: 'h3', text: 'Take one part of a task' },
+      {
+        type: 'p',
+        text: 'A task’s acceptance criteria are its parts. On the Criteria tab, each open part has a Take this part button. The hub makes a subtask for that part, claims it for you and moves the parent to In progress. One person per part, many people per task. When a lead approves your subtask as done, the part is marked met. The card shows how many parts are taken, and the task’s Overview lists everyone on it, with the part each person holds.',
+      },
+      { type: 'h3', text: 'What the lock means' },
+      {
+        type: 'table',
+        head: ['Reason', 'What to do'],
+        rows: [
+          ['Waiting for a decision', 'A lead has to answer a question first. Read the Discussion tab.'],
+          ['Blocked by another task', 'Another open task blocks this one. Finish or take that one first.'],
+          ['Someone holds the claim', 'Pick another task or ask them on the task. A claim runs out after its lease.'],
+          ['Others work on its parts', 'People hold some of its parts. Take a free part in the Criteria tab instead of the whole task.'],
+          ['Another side', 'A pool task for a side outside your Works on. Ask a lead to add the side to your profile.'],
+          ['Assigned to someone else', 'The task is not in the pool. Ask a lead if you should take it.'],
+          ['In review, proposed or closed', 'Nothing to claim: it waits for review or triage, or it is finished.'],
+        ],
+      },
+      { type: 'h3', text: 'The Free to take view' },
+      {
+        type: 'p',
+        text: 'Press Free to take at the top of the board to see only what you can take now: To do first, then Backlog. Each card says Planned or Backlog. The other views are My work, Needs decision and Blocked. Filters stay in the address bar, so you can send a filtered board as a link.',
+      },
+      { type: 'h3', text: 'From the CLI' },
+      {
+        type: 'code',
+        text: 'qhub ready\nqhub ready --planned\nqhub take HUB-16 --part 3\nqhub facets',
+      },
+      {
+        type: 'list',
+        items: [
+          '`qhub ready` lists what you can take now, planned work first.',
+          '`qhub ready --planned` shows only To do.',
+          '`qhub take HUB-16 --part 3` takes part 3 of HUB-16 and prints the new subtask.',
+          '`qhub facets` prints how many tasks match each status, priority, kind, side and area.',
+        ],
+      },
     ],
   },
   {
