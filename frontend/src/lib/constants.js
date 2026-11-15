@@ -404,6 +404,8 @@ export const NOTIFY_KIND_LABELS = {
   rejected: 'Sent back',
   approved: 'Approved',
   proposal: 'Proposal',
+  claim_idle: 'Idle claim',
+  claim_freed: 'Claim freed',
 }
 
 export const NOTIFY_KIND_VERBS = {
@@ -415,6 +417,8 @@ export const NOTIFY_KIND_VERBS = {
   rejected: 'sent your work back',
   approved: 'approved your work',
   proposal: 'proposed a task',
+  claim_idle: 'reminds you: no activity on your claim',
+  claim_freed: 'freed an idle claim',
 }
 
 // Settings checkboxes: what each email kind means to the reader.
@@ -438,6 +442,8 @@ export const NOTIFY_KIND_STYLES = {
   rejected: 'border-critical/40 text-critical',
   approved: 'border-good/40 text-good',
   proposal: 'border-series2/40 text-series2',
+  claim_idle: 'border-warning/50 text-warning',
+  claim_freed: 'border-critical/40 text-critical',
 }
 
 // The most an API token may live. Mirrors settings.api_token_max_days.

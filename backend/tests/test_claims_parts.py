@@ -297,3 +297,69 @@ class TestOpenUnassigned:
     def test_only_a_lead_sets_assign_only(self, client, auth, alice, db_session):
         r = client.post("/tasks", headers=auth(alice), json={"title": "Mine", "assign_only": True})
         assert r.status_code == 403
+
+
+class TestIdleClaims:
+    def _claimed(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        [tid] = _import(client, auth(leader), _item("QX-60", side="be", criteria=["A"]))
+        r = client.post(f"/tasks/{tid}/claim", headers=auth(alice), json={"ttl_hours": 2})
+        assert r.status_code == 200
+        return tid
+
+    def test_lease_is_48_hours_and_activity_restarts_it(self, client, auth, leader, alice, db_session):
+        from datetime import timedelta
+
+        from app.models import utcnow
+
+        tid = self._claimed(client, auth, leader, alice, db_session)
+        task = db_session.get(Task, tid)
+        left = task.claim_expires_at - utcnow()
+        assert timedelta(hours=47) < left <= timedelta(hours=48)
+        # Pretend 30 idle hours passed and a reminder went out; a comment restarts the clock.
+        task.claim_expires_at = utcnow() + timedelta(hours=18)
+        task.claim_warned_at = utcnow()
+        db_session.commit()
+        r = client.post(f"/tasks/{tid}/comments", headers=auth(alice), json={"body": "Still on it"})
+        assert r.status_code == 201, r.text
+        db_session.refresh(task)
+        assert task.claim_expires_at - utcnow() > timedelta(hours=47) and task.claim_warned_at is None
+
+    def test_someone_elses_activity_does_not_renew(self, client, auth, leader, alice, db_session):
+        from datetime import timedelta
+
+        from app.models import utcnow
+
+        tid = self._claimed(client, auth, leader, alice, db_session)
+        task = db_session.get(Task, tid)
+        task.claim_expires_at = utcnow() + timedelta(hours=5)
+        db_session.commit()
+        client.post(f"/tasks/{tid}/comments", headers=auth(leader), json={"body": "Any news?"})
+        db_session.refresh(task)
+        assert task.claim_expires_at - utcnow() < timedelta(hours=6)
+
+    def test_sweep_reminds_once_then_frees_to_the_lane(self, client, auth, leader, alice, db_session):
+        from datetime import timedelta
+
+        from app.claims import sweep
+        from app.models import Notification, utcnow
+
+        tid = self._claimed(client, auth, leader, alice, db_session)
+        task = db_session.get(Task, tid)
+        now = utcnow()
+        assert sweep(db_session, now) == {"reminded": 0, "freed": 0}
+        assert sweep(db_session, now + timedelta(hours=25)) == {"reminded": 1, "freed": 0}
+        assert sweep(db_session, now + timedelta(hours=26)) == {"reminded": 0, "freed": 0}
+        idle = db_session.query(Notification).filter_by(user_id=alice.id, kind="claim_idle").one()
+        assert "24 hours" in idle.text and idle.actor_id is None
+        assert sweep(db_session, now + timedelta(hours=49)) == {"reminded": 0, "freed": 1}
+        db_session.refresh(task)
+        assert task.claimed_by is None and task.status.value == "backlog"
+        assert db_session.query(Notification).filter_by(user_id=alice.id, kind="claim_freed").count() == 1
+        assert db_session.query(Notification).filter_by(user_id=leader.id, kind="claim_freed").count() == 1
+        ready = client.get("/tasks?ready=true", headers=auth(alice)).json()
+        assert tid in [r["id"] for r in ready]
+
+    def test_claim_kinds_are_not_a_setting(self, client, auth, alice):
+        r = client.get("/notifications/preferences", headers=auth(alice))
+        assert r.status_code == 200 and "claim_idle" not in str(r.json())

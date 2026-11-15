@@ -90,6 +90,7 @@ from app.schemas import (
 from app.notify import by_handles, leads, mentioned_handles, notify
 from app.models import Area, LinkKind, Notification, NotifyKind, TaskKind, TaskLink
 from app import templates
+from app.claims import lease_end
 from app.routers.areas import (
     area_and_children_ids, clear_pick, find_similar, resolve_area, similar_tasks, suggest_areas,
 )
@@ -1958,15 +1959,11 @@ def _claim(db: Session, auth: Auth, task: Task, agent_name: str | None, ttl_hour
     """Take or renew the lease; moves a backlog or to_do task to in_progress.
     Does not commit. Returns (task, warnings)."""
     user = auth.user
-    payload_ttl = ttl_hours
     agent = auth.agent if auth.kind is ActorKind.agent else (agent_name or "").strip() or None
     now = utcnow()
-    hours = min(payload_ttl or settings.claim_default_hours, settings.claim_max_hours)
-    expires = now + timedelta(hours=hours)
+    # The lease follows activity (app.claims); ttl_hours is accepted for old clients and ignored.
+    expires = lease_end(now)
     renewing = task.claimed_by == user.id and task.claim_agent == agent and task.claim_is_live(now)
-    if renewing and payload_ttl is None and task.claim_expires_at > expires:
-        # A plain renew keeps a longer lease the holder asked for earlier.
-        expires = task.claim_expires_at
 
     # One statement decides the race: it only writes when the task is free,
     # the old claim expired, or the same person and agent renew. `now` comes
@@ -1987,6 +1984,7 @@ def _claim(db: Session, auth: Auth, task: Task, agent_name: str | None, ttl_hour
             claimed_by=user.id,
             claim_agent=agent,
             claim_expires_at=expires,
+            claim_warned_at=None,
             claim_branch=branch or Task.claim_branch,
             version=Task.version + 1,
             updated_at=now,

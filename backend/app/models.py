@@ -381,6 +381,8 @@ class Task(Base):
     claim_agent: Mapped[str | None] = mapped_column(String(80), nullable=True)
     claim_branch: Mapped[str | None] = mapped_column(String(200), nullable=True)
     claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # When the holder was reminded that the claim is idle (cleared on activity).
+    claim_warned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     deploy_state: Mapped[DeployState] = mapped_column(
         _str_enum(DeployState, "deploy_state"), default=DeployState.none, nullable=False
@@ -777,6 +779,9 @@ class NotifyKind(str, enum.Enum):
     rejected = "rejected"
     approved = "approved"
     proposal = "proposal"
+    # From the hub itself: an idle claim, and a claim it freed.
+    claim_idle = "claim_idle"
+    claim_freed = "claim_freed"
 
 
 # What a person gets by email unless they change it. Leads also get

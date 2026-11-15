@@ -14,6 +14,7 @@ from app.config import check_production_settings, settings
 from contextlib import asynccontextmanager
 
 from app import mailer
+from app.claims import sweeper
 from app.paging import PAGING_HEADERS
 from app.routers import areas, auth, docs, github, kpi, notifications, tasks, users
 
@@ -24,7 +25,9 @@ check_production_settings(settings)
 async def lifespan(_app: FastAPI):
     # The email sender runs only when SMTP is configured (see app.mailer).
     mailer.sender.start()
+    sweeper.start()
     yield
+    sweeper.stop()
     mailer.sender.stop()
 
 
