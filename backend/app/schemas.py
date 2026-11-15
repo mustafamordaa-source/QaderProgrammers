@@ -465,6 +465,7 @@ class TaskOut(ORMModel):
     summary: str | None = None
     version: int = 1
     restricted: bool = False
+    # True when anyone on its side may claim it (no assignee, not restricted, not assign-only).
     pool: bool = False
     assign_only: bool = False
     resume_status: TaskStatus | None = None
@@ -573,7 +574,6 @@ class _TaskHubFields(BaseModel):
     areas: list[str] | None = None
     summary: str | None = Field(default=None, max_length=4_000)
     restricted: bool | None = None
-    pool: bool | None = None
     # Only a lead's chosen assignee takes it (leads only).
     assign_only: bool | None = None
     # Product area slug (GET /areas lists them); "" clears it.
@@ -661,8 +661,6 @@ class ImportTask(BaseModel):
     # Effort on the hub's scale (1, 2, 3, 5, 8, 13); left out, new tasks get the default.
     points: int | None = None
     restricted: bool = False
-    # Pool tasks can be claimed by anyone on their side. Imports default to the pool.
-    pool: bool = True
     # Sensitive work a lead assigns by hand.
     assign_only: bool = False
     # Used on create only; a later import never moves the task.

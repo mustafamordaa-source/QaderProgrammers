@@ -34,7 +34,8 @@ const FIELD_LABELS = {
   tags: 'Tags',
   areas: 'Areas',
   restricted: 'Restricted',
-  pool: 'Pool',
+  pool: 'Pool (retired)',
+  assign_only: 'Lead assigns',
 }
 
 function plain(value) {

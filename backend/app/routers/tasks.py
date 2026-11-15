@@ -6,7 +6,7 @@ Who may do what:
 - leader: everything;
 - member ("programmer"): reads every task except restricted ones and other
   people's proposals; works on (moves, edits summary/tags/areas, criteria,
-  links, deploy state) tasks assigned to them, or pool tasks they claimed;
+  links, deploy state) tasks assigned to them, or open tasks they claimed;
   creates tasks into backlog;
 - viewer: reads, nothing else.
 
@@ -181,7 +181,7 @@ def _assert_worker(task: Task, user: User) -> None:
     if not _is_worker(task, user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only change tasks assigned to you (or pool tasks you claimed)",
+            detail="You can only change tasks assigned to you (or open tasks you claimed)",
         )
 
 
@@ -611,10 +611,10 @@ def create_task(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only a leader assigns tasks; yours goes to the backlog for triage",
             )
-        if payload.restricted or payload.pool or payload.assign_only:
+        if payload.restricted or payload.assign_only:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only a leader marks a task restricted, pool or assign-only",
+                detail="Only a leader marks a task restricted or assign-only",
             )
     _validate_assignees(db, payload.assignee_1_id, payload.assignee_2_id)
 
@@ -716,7 +716,6 @@ def create_task(
         tags=payload.tags or [],
         areas=payload.areas or [],
         restricted=bool(payload.restricted),
-        pool=bool(payload.pool),
         assign_only=bool(payload.assign_only),
         created_kind=auth.kind,
         created_agent=auth.agent,
@@ -1239,7 +1238,7 @@ def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> 
         task = Task(
             title=title, description=description, priority=item.priority, status=item.status,
             created_by=auth.user.id, side=item.side, tags=item.tags or [], areas=[],
-            restricted=item.restricted, pool=item.pool, assign_only=item.assign_only, created_kind=auth.kind, created_agent=auth.agent,
+            restricted=item.restricted, assign_only=item.assign_only, created_kind=auth.kind, created_agent=auth.agent,
             kind=item.kind, fingerprint=fingerprint, area_id=area.id if area else None,
         )
         if item.points is not None:
@@ -1259,7 +1258,7 @@ def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> 
     wanted: dict[str, object] = {"title": title}
     if "description" in sent:
         wanted["description"] = description
-    for field in ("kind", "priority", "side", "restricted", "points", "pool", "assign_only"):
+    for field in ("kind", "priority", "side", "restricted", "points", "assign_only"):
         if field in sent and getattr(item, field) is not None:
             wanted[field] = getattr(item, field)
     if "tags" in sent:
@@ -1354,7 +1353,7 @@ def split_task(
     """Split a task into one subtask per side (frontend, backend, content...).
 
     Each part copies the parent's priority, tags, areas and due date. A part
-    with an assignee goes to that person; a part without one goes to the pool
+    with an assignee goes to that person; a part without one is open
     for its side, so anyone who works on that side can claim it. `order`
     makes one part wait for another (for example backend before frontend).
     A lead may split any task and assign parts; a member may split a task
@@ -1370,7 +1369,7 @@ def split_task(
         _assert_worker(parent, user)
         if any(p.assignee_id for p in payload.parts):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                                detail="Only a lead assigns parts; leave assignee_id out to put them in the pool")
+                                detail="Only a lead assigns parts; leave assignee_id out so anyone on that side can take them")
     if parent.parent_id is not None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                             detail="This task is itself a subtask; subtasks go two levels deep")
@@ -1407,7 +1406,6 @@ def split_task(
             areas=list(parent.areas or []),
             area_id=parent.area_id,
             restricted=parent.restricted,
-            pool=part.assignee_id is None,
             created_kind=auth.kind,
             created_agent=auth.agent,
             parent_id=parent.id,
@@ -1711,7 +1709,7 @@ def update_task(
     for field, value in fields.items():
         if field in _LINTED:
             value = lint.clean(value, field=field)
-        if field in {"restricted", "pool", "assign_only"} and value is None:
+        if field in {"restricted", "assign_only"} and value is None:
             continue
         if field in {"tags", "areas"} and value is None:
             value = []
@@ -2104,11 +2102,10 @@ def take_part(
         areas=list(parent.areas or []),
         area_id=parent.area_id,
         restricted=parent.restricted,
-        pool=parent.open_to_side,
         assign_only=parent.assign_only,
         # Restricted or assigned work stays with the taker: they can open it, and a lapsed
         # claim does not hand it to the whole side.
-        assignee_1_id=user.id if (parent.restricted or not parent.open_to_side) else None,
+        assignee_1_id=user.id if not parent.open_to_side else None,
         kind=parent.kind,
         created_kind=auth.kind,
         created_agent=auth.agent,

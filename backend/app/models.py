@@ -363,7 +363,9 @@ class Task(Base):
     # Leader-only visibility.
     restricted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Any member may claim a pool task, not only its assignees.
-    pool: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Retired: the old "pool" box. Kept as a column so old rows load; nothing reads it.
+    # `pool` below now answers whether the task is open to its side.
+    pool_flag: Mapped[bool] = mapped_column("pool", Boolean, default=False, nullable=False)
     # Sensitive work: only a lead's chosen assignee takes it, never the side at large.
     assign_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
     # Where blocked / needs_confirm return to.
@@ -464,22 +466,21 @@ class Task(Base):
 
     @hybrid_property
     def open_to_side(self) -> bool:
-        """Anyone on the task's side may claim it: a pool task, or one nobody is
-        assigned to that is not restricted. Work without an owner is free work,
-        unless a lead marked it assign-only."""
-        if self.assign_only:
-            return False
-        return self.pool or (not self.restricted and self.assignee_1_id is None and self.assignee_2_id is None)
+        """Anyone on the task's side may claim it: nobody is assigned, it is not
+        restricted and a lead did not mark it assign-only. Work without an owner
+        is free work."""
+        return (not self.assign_only and not self.restricted
+                and self.assignee_1_id is None and self.assignee_2_id is None)
 
     @open_to_side.expression
     def open_to_side(cls):
-        return and_(
-            cls.assign_only.is_(False),
-            or_(
-                cls.pool.is_(True),
-                and_(cls.restricted.is_(False), cls.assignee_1_id.is_(None), cls.assignee_2_id.is_(None)),
-            ),
-        )
+        return and_(cls.assign_only.is_(False), cls.restricted.is_(False),
+                    cls.assignee_1_id.is_(None), cls.assignee_2_id.is_(None))
+
+    @property
+    def pool(self) -> bool:
+        """API name kept for clients: true when the task is open to its side."""
+        return self.open_to_side
 
     def claim_is_live(self, now: datetime) -> bool:
         return (

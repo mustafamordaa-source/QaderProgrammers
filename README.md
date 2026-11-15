@@ -82,7 +82,7 @@ including restricted ones, and every member's metrics. Manages accounts.
 
 **Member** (stored as `programmer`) reads every task except restricted ones
 and other people's proposals, so frontend and backend can follow each other's
-work. Works on tasks assigned to them, or pool tasks they claimed: moves them,
+work. Works on tasks assigned to them, or open tasks they claimed: moves them,
 edits summary, tags, areas and side, manages criteria, links commits and PRs,
 sets deploy state. Creates tasks; they land in the backlog for the leader.
 
@@ -185,9 +185,9 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
 - **Claim from the plan or the backlog**: a member claims a `to_do` or
   `backlog` task and it moves to `in_progress`. Tasks waiting for a decision
   (`needs_confirm`), parked as blocked, in review, proposed or closed cannot be
-  claimed. A task with no assignee that is not restricted is open to its side
-  without the pool box: anyone whose "Works on" includes the side can take it.
-  `pool: true` keeps a task open even with assignees. A lead ticks
+  claimed. A task with no assignee that is not restricted is open to its side:
+  anyone whose "Works on" includes the side can take it. There is no pool box;
+  the API's `pool` field reports whether a task is open. A lead ticks
   `assign_only` ("Lead assigns") for sensitive work: nobody claims it or takes
   its parts until a lead assigns a person (`claim_block: assign_only`).
 - **Free to take** (`GET /tasks?ready=true`): what you can claim now, planned
@@ -233,12 +233,12 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
 - **Split by side**: `POST /tasks/{id}/split` with `parts` (one per side:
   fe, be, content...) turns a task that needs several roles into one subtask
   per side, copying priority, tags, areas and due date. A part with
-  `assignee_id` goes to that person; one without goes to the pool for its
+  `assignee_id` goes to that person; one without is open to its
   side, and only people whose "Works on" includes that side (or a lead) can
   claim it. `order` (`[{"before": "be", "after": "fe"}]`) makes one part
   block another. The parent lists every part with its side, people, claim
   and status; it starts when the first part starts, and leads hear when
-  every part is closed. A member may split a task they work on into pool
+  every part is closed. A member may split a task they work on into open
   parts; only a lead assigns parts.
 - **Fingerprints**: a creator (usually a scanner) may send a `fingerprint`
   such as `rule:path:symbol`. While a task with that fingerprint is open, a
@@ -381,7 +381,7 @@ handle, github_login, sides, wip_limit
 
 **tasks**: id, title, description, priority, points, status, due_date,
 created_by, assignee_1_id, assignee_2_id, created_at, updated_at, side, tags,
-areas, summary, version, restricted, pool, resume_status, created_kind,
+areas, summary, version, restricted, pool (retired column), assign_only, resume_status, created_kind,
 created_agent, claimed_by, claim_agent, claim_branch, claim_expires_at,
 deploy_state, deploy_note, deployed_at, drop_reason
 

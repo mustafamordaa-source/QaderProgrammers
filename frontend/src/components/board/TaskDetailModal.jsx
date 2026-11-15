@@ -257,9 +257,9 @@ export default function TaskDetailModal({
             Restricted
           </span>
         )}
-        {task.pool && (
-          <span className="rounded-full border border-hairline px-2 py-0.5 text-[11px] text-ink-secondary">
-            Pool
+        {task.assign_only && (
+          <span className="rounded-full border border-warning/40 px-2 py-0.5 text-[11px] text-ink-secondary">
+            Lead assigns
           </span>
         )}
         <span className="tabular ml-auto text-[11px] text-ink-muted">Version {task.version}</span>
