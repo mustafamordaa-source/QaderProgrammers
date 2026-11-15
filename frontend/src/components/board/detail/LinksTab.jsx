@@ -124,7 +124,7 @@ function RosterRow({ part, blockedBy, onOpen }) {
           <span dir="auto">{people.map((p) => `@${p}`).join(' + ')}</span>
         ) : part.pool ? (
           <span className="rounded-full border border-series1/30 px-2 py-0.5 text-[11px] font-medium text-series1">
-            Pool{part.side ? `: any ${SIDE_LABELS[part.side] ?? part.side}` : ''}
+            Open{part.side ? `: any ${SIDE_LABELS[part.side] ?? part.side}` : ''}
           </span>
         ) : (
           <span className="text-ink-muted">Unassigned</span>

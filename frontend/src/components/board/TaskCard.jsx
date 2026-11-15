@@ -65,7 +65,7 @@ function Avatar({ person, me }) {
 function Assignees({ task, user, compact = false }) {
   const people = [task.assignee_1, task.assignee_2].filter(Boolean)
   if (people.length === 0) {
-    return <span className="text-[11px] text-ink-muted">{task.pool ? 'Pool' : 'Unassigned'}</span>
+    return <span className="text-[11px] text-ink-muted">{task.pool ? 'Open' : task.assign_only ? 'Lead assigns' : 'Unassigned'}</span>
   }
   return (
     <span className="flex items-center gap-1.5">
@@ -76,7 +76,6 @@ function Assignees({ task, user, compact = false }) {
       </span>
       <span className="sr-only">Assigned to {people.map((p) => p.name).join(' and ')}</span>
       {!compact && people.length === 2 && <span className="text-[11px] text-ink-muted">shared</span>}
-      {!compact && task.pool && <span className="text-[11px] text-ink-muted">· pool</span>}
     </span>
   )
 }

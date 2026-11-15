@@ -67,7 +67,6 @@ function EditForm({ ctx, programmers, onDone }) {
     points: task.points,
     due_date: toDateInputValue(task.due_date),
     restricted: Boolean(task.restricted),
-    pool: Boolean(task.pool),
     assign_only: Boolean(task.assign_only),
     assignee_1_id: task.assignee_1_id ? String(task.assignee_1_id) : '',
     assignee_2_id: task.assignee_2_id ? String(task.assignee_2_id) : '',
@@ -106,7 +105,6 @@ function EditForm({ ctx, programmers, onDone }) {
       const due = fromDateInputValue(form.due_date, true)
       if (form.due_date !== toDateInputValue(task.due_date)) out.due_date = due
       put('restricted', form.restricted, Boolean(task.restricted))
-      put('pool', form.pool, Boolean(task.pool))
       put('assign_only', form.assign_only, Boolean(task.assign_only))
       put('kind', form.kind, task.kind ?? 'task')
       // 0 clears the parent.
@@ -320,10 +318,6 @@ function EditForm({ ctx, programmers, onDone }) {
             <label className="inline-flex items-center gap-2">
               <input type="checkbox" checked={form.restricted} onChange={(e) => update('restricted', e.target.checked)} />
               Restricted (leads only)
-            </label>
-            <label className="inline-flex items-center gap-2">
-              <input type="checkbox" checked={form.pool} onChange={(e) => update('pool', e.target.checked)} />
-              Pool (any member may claim)
             </label>
             <label className="inline-flex items-center gap-2">
               <input type="checkbox" checked={form.assign_only} onChange={(e) => update('assign_only', e.target.checked)} />

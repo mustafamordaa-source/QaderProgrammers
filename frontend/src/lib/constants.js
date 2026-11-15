@@ -122,7 +122,7 @@ export function reachableTargets(current, resumeStatus) {
 /**
  * Statuses this person may move the task to. Mirrors check_transition.
  * `isWorker` is true for assignees and for the holder of a live claim on a
- * pool task; leads and admins may move anything.
+ * open task; leads and admins may move anything.
  */
 export function allowedTargets(task, user, isWorker) {
   if (!task || CLOSED.has(task.status)) return []

@@ -161,9 +161,13 @@ class TestFiltersAndFacets:
         assert r.status_code == 422 and "soon" in r.json()["detail"]
 
 
-def test_import_can_keep_a_task_out_of_the_pool(client, auth, leader, db_session):
-    [tid] = _import(client, auth(leader), _item("QX-30", pool=False))
-    assert db_session.get(Task, tid).pool is False
+def test_import_has_no_pool_box_but_can_mark_assign_only(client, auth, leader, alice, db_session):
+    _member(alice, db_session)
+    [open_task, kept] = _import(client, auth(leader), _item("QX-30", side="be"),
+                                _item("QX-31", side="be", assign_only=True))
+    assert client.get(f"/tasks/{open_task}", headers=auth(alice)).json()["claimable"] is True
+    row = client.get(f"/tasks/{kept}", headers=auth(alice)).json()
+    assert row["claimable"] is False and row["claim_block"] == "assign_only"
 
 
 def test_brief_and_refusal_code_for_agents(client, auth, leader, alice, db_session):
@@ -262,7 +266,7 @@ class TestOpenUnassigned:
     def test_unassigned_task_is_open_to_its_side_without_the_pool_box(self, client, auth, leader, alice, db_session):
         _member(alice, db_session)
         t = client.post("/tasks", headers=auth(leader), json={"title": "Plain work", "side": "be"}).json()
-        assert t["pool"] is False
+        assert t["pool"] is True  # "open to its side" in the API
         row = client.get(f"/tasks/{t['id']}", headers=auth(alice)).json()
         assert row["claimable"] is True
         assert t["id"] in [r["id"] for r in client.get("/tasks?ready=true", headers=auth(alice)).json()]

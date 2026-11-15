@@ -479,7 +479,7 @@ export default function BoardPage() {
               ? 'Every task across the team. Leads triage, approve and drop work.'
               : isReadOnly
                 ? 'Read-only view of the team’s work.'
-                : 'The team’s work. You can move tasks assigned to you and pool tasks you claimed.'}
+                : 'The team’s work. You can move tasks assigned to you and open tasks you claimed.'}
           </p>
         </div>
 

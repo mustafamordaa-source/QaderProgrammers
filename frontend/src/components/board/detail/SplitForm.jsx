@@ -16,7 +16,7 @@ function emptyPart() {
 
 /**
  * POST /tasks/{id}/split: one subtask per ticked side. Leads may assign each
- * part; a member's parts all go to the pool for their side. `order` rows make
+ * part; a member's parts are open to anyone on their side. `order` rows make
  * one part block another ("Backend before Frontend").
  */
 export default function SplitForm({ ctx, onDone }) {
@@ -83,8 +83,8 @@ export default function SplitForm({ ctx, onDone }) {
         <p className="mt-0.5 text-xs text-ink-muted">
           Each part becomes a subtask with this task’s priority, tags, areas and due date.
           {isLead
-            ? ' A part without an assignee goes to the pool for its side.'
-            : ' Your parts go to the pool for their side; a lead assigns people.'}
+            ? ' A part without an assignee is open to anyone on its side.'
+            : ' Your parts are open to anyone on their side; a lead assigns people.'}
         </p>
       </div>
 

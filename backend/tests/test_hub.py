@@ -165,10 +165,11 @@ class TestClaims:
         assert response.status_code == 200
         assert response.json()["claim_agent"] == "new"
 
-    def test_members_claim_only_their_tasks_or_pool_tasks(self, client, alice, bob, token, make_task, db_session):
+    def test_members_claim_only_their_tasks_or_open_tasks(self, client, alice, bob, token, make_task, db_session):
         task = make_task(assignee_1=alice)
         assert client.post(f"/tasks/{task.id}/claim", headers=token(bob), json={}).status_code == 403
-        task.pool = True
+        # Nobody assigned: open to anyone on its side.
+        task.assignee_1_id = None
         db_session.commit()
         assert client.post(f"/tasks/{task.id}/claim", headers=token(bob), json={}).status_code == 200
 

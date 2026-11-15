@@ -57,7 +57,6 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
     criteria: '',
     status: 'to_do',
     restricted: false,
-    pool: false,
     assign_only: false,
     kind: 'task',
     use_template: true,
@@ -172,7 +171,6 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
         assignee_1_id: form.assignee_1_id ? Number(form.assignee_1_id) : null,
         assignee_2_id: form.assignee_2_id ? Number(form.assignee_2_id) : null,
         restricted: form.restricted,
-        pool: form.pool,
         assign_only: form.assign_only,
       })
     } else {
@@ -567,20 +565,6 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
                 <span>
                   Restricted
                   <span className="block text-xs text-ink-muted">Only leads can see it.</span>
-                </span>
-              </label>
-              <label className="flex items-start gap-2">
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  checked={form.pool}
-                  onChange={(event) => update('pool', event.target.checked)}
-                />
-                <span>
-                  Pool
-                  <span className="block text-xs text-ink-muted">
-                    Any member may claim it, even with assignees. A task with no assignee is open anyway.
-                  </span>
                 </span>
               </label>
               <label className="flex items-start gap-2">
