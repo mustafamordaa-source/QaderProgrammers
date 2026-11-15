@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { api } from '../../../api/client'
-import { ActorBadge, PlainText } from '../../Badges'
-import { CRITERION_LABELS } from '../../../lib/constants'
+import { ActorBadge, PlainText, StatusBadge } from '../../Badges'
+import { CRITERION_LABELS, taskKey } from '../../../lib/constants'
 import { formatDateTime } from '../../../lib/format'
+import { HandIcon, LockIcon, PartIcon } from '../BoardIcons'
 import { linkButton, primaryButton, secondaryButton, smallInputClass } from './ui'
 
 const STATE_STYLES = {
@@ -11,8 +12,88 @@ const STATE_STYLES = {
   dropped: 'border-hairline text-ink-muted line-through',
 }
 
+/** Who holds this part, through which subtask, and how far it is. */
+function PartTaken({ subtask, openTask }) {
+  const holder = subtask.claim_holder || subtask.assignees?.[0] || null
+  return (
+    <p className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-ink-secondary">
+      <PartIcon className="h-3 w-3 text-ink-muted" />
+      <span dir="auto">{holder ? `Taken by @${holder}` : 'Taken'}</span>
+      <span aria-hidden="true">·</span>
+      <a
+        href={`/t/${subtask.id}`}
+        onClick={(event) => {
+          event.preventDefault()
+          openTask(subtask.id)
+        }}
+        className="tabular text-series1 hover:underline"
+      >
+        {taskKey(subtask.id)}
+      </a>
+      {subtask.status && <StatusBadge status={subtask.status} />}
+    </p>
+  )
+}
+
+/**
+ * Take this part: the server makes a subtask for it and claims that for you.
+ * The answer (or the reason it was refused) shows on the row itself.
+ */
+function TakePart({ ctx, criterion }) {
+  const { task, busy, reload, onOtherChanged } = ctx
+  const [taking, setTaking] = useState(false)
+  const [error, setError] = useState(null)
+  const [done, setDone] = useState(null)
+
+  async function take() {
+    setError(null)
+    setDone(null)
+    setTaking(true)
+    try {
+      const subtask = await api.takePart(task.id, criterion.n)
+      onOtherChanged?.(subtask)
+      await reload()
+      setDone(
+        subtask?.warnings?.length
+          ? `You took part ${criterion.n} as ${taskKey(subtask.id)}, with warnings: ${subtask.warnings.join(' ')}`
+          : `You took part ${criterion.n}. ${taskKey(subtask.id)} is in progress and yours.`,
+      )
+    } catch (err) {
+      setError(err.message)
+      await reload()
+    } finally {
+      setTaking(false)
+    }
+  }
+
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={take}
+        disabled={busy || taking}
+        title="Make a subtask for this part, claimed by you"
+        className={`${secondaryButton} inline-flex items-center gap-1.5 border-series1/50 text-series1`}
+      >
+        <HandIcon />
+        {taking ? 'Taking…' : 'Take this part'}
+      </button>
+      {error && (
+        <p role="alert" dir="auto" className="mt-1.5 text-xs text-critical">
+          {error}
+        </p>
+      )}
+      {done && (
+        <p role="status" dir="auto" className="mt-1.5 text-xs text-good">
+          {done}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function CriterionRow({ ctx, criterion }) {
-  const { task, isWorker, isReadOnly, busy, run } = ctx
+  const { task, isWorker, isReadOnly, busy, run, openTask } = ctx
   // null, 'met' or 'dropped': which inline form is open.
   const [mode, setMode] = useState(null)
   const [evidence, setEvidence] = useState(criterion.evidence ?? '')
@@ -59,6 +140,17 @@ function CriterionRow({ ctx, criterion }) {
             {criterion.checked_kind && <ActorBadge kind={criterion.checked_kind} />}
           </p>
         )}
+
+        {criterion.subtask ? (
+          <PartTaken subtask={criterion.subtask} openTask={openTask} />
+        ) : criterion.state === 'open' && criterion.can_take && !isReadOnly ? (
+          <TakePart ctx={ctx} criterion={criterion} />
+        ) : criterion.state === 'open' && criterion.take_block_text ? (
+          <p dir="auto" className="mt-2 flex items-start gap-1.5 text-xs text-ink-muted">
+            <LockIcon className="mt-0.5 h-3 w-3" />
+            <span>{criterion.take_block_text}</span>
+          </p>
+        ) : null}
 
         {canEdit && !mode && (
           <div className="mt-2 flex flex-wrap gap-3">
@@ -130,6 +222,8 @@ export default function CriteriaTab({ ctx, criteria }) {
   const [text, setText] = useState('')
   const open = criteria.filter((c) => c.state === 'open').length
   const met = criteria.filter((c) => c.state === 'met').length
+  const taken = criteria.filter((c) => c.subtask).length
+  const partsOpen = criteria.some((c) => c.can_take)
 
   async function add(event) {
     event.preventDefault()
@@ -144,6 +238,13 @@ export default function CriteriaTab({ ctx, criteria }) {
           ? 'No acceptance criteria yet.'
           : `${met} met, ${open} open, ${criteria.length - met - open} dropped. Review and Done stay locked while any is open.`}
       </p>
+      {(taken > 0 || partsOpen) && (
+        <p className="text-xs text-ink-muted">
+          Each criterion is a part one person can take. Taking a part makes a subtask for it, claimed by you; the
+          part is marked met when that subtask is approved. {taken} of {criteria.length} part
+          {criteria.length === 1 ? '' : 's'} taken.
+        </p>
+      )}
 
       {criteria.length > 0 && (
         <ol className="space-y-2">

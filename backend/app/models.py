@@ -406,7 +406,8 @@ class Task(Base):
         back_populates="task", order_by="Comment.id", cascade="all, delete-orphan"
     )
     criteria: Mapped[list[Criterion]] = relationship(
-        back_populates="task", order_by="Criterion.n", cascade="all, delete-orphan"
+        back_populates="task", order_by="Criterion.n", cascade="all, delete-orphan",
+        foreign_keys="Criterion.task_id",
     )
     git_links: Mapped[list[GitLink]] = relationship(
         back_populates="task", order_by="GitLink.id", cascade="all, delete-orphan"
@@ -579,8 +580,11 @@ class Criterion(Base):
     )
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    # Set when someone took this part: the subtask made from it.
+    subtask_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True, index=True)
 
-    task: Mapped[Task] = relationship(back_populates="criteria")
+    task: Mapped[Task] = relationship(back_populates="criteria", foreign_keys=[task_id])
+    subtask: Mapped["Task | None"] = relationship(foreign_keys=[subtask_id], lazy="joined")
 
     __table_args__ = (UniqueConstraint("task_id", "n", name="uq_task_criteria_n"),)
 

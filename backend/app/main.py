@@ -47,7 +47,7 @@ app.add_middleware(
     allow_headers=["*"],
     # Paged lists carry their totals in headers; a browser on another origin
     # reads only the ones named here.
-    expose_headers=list(PAGING_HEADERS),
+    expose_headers=[*PAGING_HEADERS, "X-Claim-Block"],
 )
 
 app.include_router(auth.router)

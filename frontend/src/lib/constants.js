@@ -572,3 +572,35 @@ export function parseTaskRef(value) {
 export function taskLink(id) {
   return `${window.location.origin}/t/${id}`
 }
+
+// Claim refusals not worth a lock icon on a card: the column already says why.
+export const QUIET_CLAIM_BLOCKS = new Set(['closed', 'viewer', 'proposed', 'in_review'])
+
+/**
+ * May the viewer claim this task now? The server's `claimable` wins; older
+ * answers without it fall back to the local rule.
+ */
+export function claimableNow(task, user) {
+  if (typeof task?.claimable === 'boolean') return task.claimable
+  return canClaim(task, user) && !claimIsLive(task) && !(task?.blocked_by?.length > 0)
+}
+
+/** "whole task", "assigned" or "part 3 via HUB-31" for one entry of `task.people`. */
+export function personRoleText(person, taskId) {
+  if (person.role === 'part') {
+    const part = person.part ? `part ${person.part}` : 'a part'
+    return person.task_id && person.task_id !== taskId ? `${part} via ${taskKey(person.task_id)}` : part
+  }
+  return person.role === 'claim' ? 'whole task' : 'assigned'
+}
+
+/** `task.people` grouped per person: [{handle, name, entries: [person, ...]}]. */
+export function groupPeople(people) {
+  const byKey = new Map()
+  for (const person of people ?? []) {
+    const key = person.handle || person.name
+    if (!byKey.has(key)) byKey.set(key, { handle: person.handle, name: person.name || person.handle, entries: [] })
+    byKey.get(key).entries.push(person)
+  }
+  return [...byKey.values()]
+}

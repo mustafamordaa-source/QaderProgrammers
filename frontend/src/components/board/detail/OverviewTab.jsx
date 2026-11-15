@@ -4,6 +4,7 @@ import { ActorBadge, DeployBadge, PlainText, TagBadge } from '../../Badges'
 import AreaPicker from '../AreaPicker'
 import PointsPicker from '../PointsPicker'
 import TaskPicker from '../TaskPicker'
+import { LockIcon } from '../BoardIcons'
 import {
   DEPLOY_LABELS,
   DEPLOY_STATES,
@@ -16,8 +17,11 @@ import {
   assignablePeople,
   canClaim,
   claimIsLive,
+  groupPeople,
+  personRoleText,
   splitList,
   taskIdList,
+  taskKey,
 } from '../../../lib/constants'
 import {
   formatDate,
@@ -386,28 +390,102 @@ function DeployEditor({ ctx }) {
   )
 }
 
+/** One entry of `task.people` in words; a part held through a subtask links to it. */
+function PersonRole({ entry, taskId, openTask }) {
+  const text = personRoleText(entry, taskId)
+  if (entry.role !== 'part' || !entry.task_id || entry.task_id === taskId) return <span>{text}</span>
+  const key = taskKey(entry.task_id)
+  const [before] = text.split(key)
+  return (
+    <span>
+      {before}
+      <a
+        href={`/t/${entry.task_id}`}
+        onClick={(event) => {
+          event.preventDefault()
+          openTask(entry.task_id)
+        }}
+        className="text-series1 hover:underline"
+      >
+        {key}
+      </a>
+    </span>
+  )
+}
+
+/** Everyone on the task: assignees, the claim holder and people on its parts. */
+function PeopleOnTask({ task, openTask }) {
+  const people = groupPeople(task.people)
+  if (people.length === 0) return <span className="text-ink-muted">Nobody yet</span>
+  return (
+    <ul className="space-y-1">
+      {people.map((person) => (
+        <li key={person.handle || person.name} className="min-w-0">
+          <span dir="auto" className="font-medium">
+            {person.name}
+          </span>
+          {person.handle && <span className="text-ink-muted"> @{person.handle}</span>}
+          <span className="text-ink-secondary">
+            {' · '}
+            {person.entries.map((entry, index) => (
+              <span key={`${entry.role}-${entry.task_id}-${entry.part ?? ''}`}>
+                {index > 0 && ', '}
+                <PersonRole entry={entry} taskId={task.id} openTask={openTask} />
+              </span>
+            ))}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 function ClaimPanel({ ctx }) {
-  const { task, user, isLead, busy, run } = ctx
+  const { task, user, isLead, isReadOnly, busy, run, reload } = ctx
   const [branch, setBranch] = useState(task.claim_branch ?? '')
+  const [taking, setTaking] = useState(false)
+  // The outcome of the last Take, shown here instead of far up the dialog.
+  const [message, setMessage] = useState(null)
   const live = claimIsLive(task)
   const mine = live && task.claimed_by === user.id
-  const claimable = canClaim(task, user) && (!live || mine || isLead)
-  const canRelease = task.claimed_by && (task.claimed_by === user.id || isLead)
-  // The server refuses any claim, a renewal too, while an open task blocks this one.
+  // The server says whether you may claim now and, if not, why. Older answers
+  // without `claimable` fall back to the local rule.
+  const serverSays = typeof task.claimable === 'boolean'
   const blockers = task.blocked_by ?? []
-  const blockedText = blockers.length
-    ? `Blocked by open task ${taskIdList(blockers)}. Finish or unlink it first.`
-    : null
+  const claimable = serverSays
+    ? task.claimable
+    : canClaim(task, user) && (!live || mine || isLead) && blockers.length === 0
+  const canRelease = task.claimed_by && (task.claimed_by === user.id || isLead)
+  let reason = null
+  if (!claimable && !mine && !isReadOnly) {
+    reason = serverSays
+      ? task.claim_block_text
+      : blockers.length
+        ? `Blocked by open task ${taskIdList(blockers)}. Finish or unlink it first.`
+        : null
+  }
 
   async function claim(event) {
     event.preventDefault()
-    await run(() => api.claim(task.id, { branch: branch.trim() || null }), {
-      reloadAfter: true,
-      success: (result) =>
-        result?.warnings?.length
-          ? `Claimed, with warnings:\n${result.warnings.map((w) => `• ${w}`).join('\n')}`
-          : 'Claimed.',
-    })
+    setMessage(null)
+    setTaking(true)
+    try {
+      const result = await api.claim(task.id, { branch: branch.trim() || null })
+      await reload()
+      setMessage({
+        tone: 'good',
+        text: result?.warnings?.length
+          ? `Taken, with warnings:\n${result.warnings.map((w) => `• ${w}`).join('\n')}`
+          : mine
+            ? 'Claim renewed.'
+            : 'Taken. The task is in progress and yours now.',
+      })
+    } catch (err) {
+      setMessage({ tone: 'critical', text: err.message })
+      await reload()
+    } finally {
+      setTaking(false)
+    }
   }
 
   return (
@@ -430,7 +508,7 @@ function ClaimPanel({ ctx }) {
         </p>
       )}
 
-      {claimable && (
+      {(claimable || mine) && !isReadOnly && (
         <form onSubmit={claim} className="mt-2.5 flex flex-wrap items-center gap-2">
           <input
             aria-label="Branch"
@@ -441,19 +519,28 @@ function ClaimPanel({ ctx }) {
             onChange={(e) => setBranch(e.target.value)}
             className={`${smallInputClass} max-w-xs font-mono text-xs`}
           />
-          <button
-            type="submit"
-            disabled={busy || Boolean(blockedText)}
-            title={blockedText ?? undefined}
-            className={primaryButton}
-          >
-            {mine ? 'Renew claim' : 'Claim'}
+          <button type="submit" disabled={busy || taking} className={primaryButton}>
+            {taking ? 'Taking…' : mine ? 'Renew claim' : 'Take'}
           </button>
         </form>
       )}
-      {claimable && blockedText && <p className="mt-1.5 text-xs text-ink-muted">{blockedText}</p>}
-      {claimable && task.status === 'to_do' && !mine && (
-        <p className="mt-1.5 text-xs text-ink-muted">Claiming a To do task moves it to In progress.</p>
+      {reason && (
+        <p dir="auto" className="mt-2 flex items-start gap-1.5 text-xs text-ink-secondary">
+          <LockIcon className="mt-0.5 h-3 w-3" />
+          <span>{reason}</span>
+        </p>
+      )}
+      {claimable && !mine && (task.status === 'to_do' || task.status === 'backlog') && (
+        <p className="mt-1.5 text-xs text-ink-muted">Taking it moves it to In progress and makes it yours.</p>
+      )}
+      {message && (
+        <p
+          role={message.tone === 'critical' ? 'alert' : 'status'}
+          dir="auto"
+          className={`mt-2 whitespace-pre-line text-xs ${message.tone === 'critical' ? 'text-critical' : 'text-good'}`}
+        >
+          {message.text}
+        </p>
       )}
       {canRelease && (
         <button
@@ -470,7 +557,7 @@ function ClaimPanel({ ctx }) {
 }
 
 export default function OverviewTab({ ctx }) {
-  const { task, people, isLead, isWorker, isReadOnly, closed } = ctx
+  const { task, people, isLead, isWorker, isReadOnly, closed, openTask } = ctx
   const [editing, setEditing] = useState(false)
   const programmers = assignablePeople(people)
   const assignees = [task.assignee_1, task.assignee_2].filter(Boolean)
@@ -558,6 +645,13 @@ export default function OverviewTab({ ctx }) {
           <Field label="Assigned to">
             {assignees.length ? assignees.map(personName).join(' + ') : task.pool ? 'Pool' : 'Unassigned'}
           </Field>
+          {Array.isArray(task.people) && (
+            <div className="col-span-2 lg:col-span-1">
+              <Field label="People on this task">
+                <PeopleOnTask task={task} openTask={openTask} />
+              </Field>
+            </div>
+          )}
           <Field label="Due">{formatDate(task.due_date)}</Field>
           <Field label="Created">
             <span className="block">

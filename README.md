@@ -180,6 +180,41 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   adds `to=leads` for questions to any lead. On the board it is the "Waiting
   on a decision" toggle; in the CLI, `qhub decisions`.
 
+## Taking work
+
+- **Claim from the plan or the backlog**: a member claims a `to_do` or
+  `backlog` task and it moves to `in_progress`. Tasks waiting for a decision
+  (`needs_confirm`), parked as blocked, in review, proposed or closed cannot be
+  claimed. Imported tasks are pool tasks (`pool: true` by default), so anyone
+  whose "Works on" includes the task's side can take them.
+- **Free to take** (`GET /tasks?ready=true`): what you can claim now, planned
+  (`to_do`) first, then backlog, each by priority, then oldest first. Each row
+  carries `lane` (`planned` or `backlog`); `lane=planned` keeps only the plan.
+- **Why not**: every task row (list, detail, brief) tells the caller
+  `claimable`, plus `claim_block` (a code: `waiting_decision`, `other_side`,
+  `not_pool`, `blocked_by`, `claimed`, `parts_taken`, `in_review`, `blocked`,
+  `proposed`, `closed`, `viewer`) and `claim_block_text` (one sentence). A refused claim
+  answers 403 or 409 with that sentence in `detail` and the code in the
+  `X-Claim-Block` header.
+- **Take one part**: `POST /tasks/{id}/criteria/{n}/take` turns acceptance
+  criterion `n` into a subtask on the parent's side, links the part to it and
+  claims it for you. One person per part, many people per task. When the
+  subtask is approved as done, the part is marked met; a dropped subtask
+  frees the part again. A member cannot take a part while someone else holds
+  the whole task, or claim the whole task while others hold its parts.
+- **Release and planning**: releasing a claim sends the task back to the lane
+  it was claimed from (backlog or to_do), so it is free to take again. A
+  member who claimed from the backlog and moves the task back gets backlog,
+  not to_do: planning stays a lead's call.
+- **People on a task**: `people` lists the claim holder, the assignees and
+  everyone on its subtasks (`role: part` with the part number);
+  `parts_total` and `parts_taken` count the parts.
+- **Filters and counts**: `GET /tasks` also takes `priority` and `kinds`
+  (comma lists), `side` as a comma list, `subtasks=top|only`, `lane` and
+  `claimable=true`. `GET /tasks/facets` takes the same filters and answers
+  counts by status, priority, kind, side, area and lane, plus how many you
+  can claim.
+
 ## Task kinds, links and subtasks
 
 - **Kinds**: task, bug, feature, chore, content, docs, research. Each kind has
@@ -443,7 +478,8 @@ PATCH  /users/{id}                  leader: name, email, role, profile, is_activ
 POST   /users/{id}/password         leader: reset a password
 
 POST   /tasks                       create (members: into backlog)
-GET    /tasks                       ?mine ?ready ?side ?tag ?q ?status_filter ?include_closed
+GET    /tasks                       ?mine ?ready ?lane ?side ?priority ?kinds ?subtasks ?claimable ?tag ?q ?status_filter ?include_closed
+GET    /tasks/facets                counts for the same filters
 GET    /tasks/inbox                 questions to you, your parked tasks, leader queues
 GET    /tasks/{id}                  full detail: events, comments, criteria, links
 GET    /tasks/{id}/brief            what an agent needs, about 2 KB
@@ -452,7 +488,8 @@ PATCH  /tasks/{id}                  edit fields (expected_version optional)
 PATCH  /tasks/{id}/status           move a task; validated server-side
 PATCH  /tasks/{id}/assign           leader: reassign
 POST   /tasks/{id}/reject           leader: back to in_progress, comment required
-POST   /tasks/{id}/claim            take or renew a lease; 409 if someone holds it
+POST   /tasks/{id}/claim            take or renew a lease (backlog or to_do moves to in_progress); 409 if someone holds it
+POST   /tasks/{id}/criteria/{n}/take  take one part: a subtask for criterion n, claimed for you
 POST   /tasks/{id}/release          drop your claim
 GET    /tasks/{id}/comments
 POST   /tasks/{id}/comments         note, question, answer, decision, review, handback

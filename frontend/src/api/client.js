@@ -26,6 +26,18 @@ export class ApiError extends Error {
   }
 }
 
+// Words for an error the server sent without a `detail`, so nobody sees a bare code.
+function statusText(status) {
+  if (status === 400 || status === 422) return 'The server could not accept that request. Check the fields and try again.'
+  if (status === 401) return 'Your session ended. Sign in again.'
+  if (status === 403) return 'You do not have access to do that.'
+  if (status === 404) return 'That item does not exist, or you cannot see it.'
+  if (status === 409) return 'That clashes with the task’s current state. Reload and try again.'
+  if (status === 429) return 'Too many requests. Wait a moment and try again.'
+  if (status >= 500) return 'The server had a problem. Try again in a minute.'
+  return `Request failed (${status})`
+}
+
 function readDetail(body, fallback) {
   const detail = body?.detail
   if (typeof detail === 'string') return detail
@@ -56,8 +68,9 @@ async function request(path, { method = 'GET', body, params, form, as = 'json' }
   const url = new URL(`${BASE_URL}${path}`, window.location.origin)
   if (params) {
     for (const [key, value] of Object.entries(params)) {
-      if (value !== undefined && value !== null && value !== '') {
-        url.searchParams.set(key, value)
+      const text = Array.isArray(value) ? value.join(',') : value
+      if (text !== undefined && text !== null && text !== '') {
+        url.searchParams.set(key, text)
       }
     }
   }
@@ -89,7 +102,7 @@ async function request(path, { method = 'GET', body, params, form, as = 'json' }
   if (!response.ok) {
     const detail = payload?.detail
     throw new ApiError(
-      readDetail(payload, `Request failed (${response.status})`),
+      readDetail(payload, statusText(response.status)),
       response.status,
       detail && typeof detail === 'object' && !Array.isArray(detail) ? detail : null,
     )
@@ -132,11 +145,18 @@ export const api = {
   revokeToken: (id) => request(`/auth/tokens/${id}`, { method: 'DELETE' }),
 
   // filters: { mine, ready, side, tag, q, status_filter, include_closed, created_kind, created_by,
-  //            kind, parent_id, pool, my_sides, limit }
+  //            kind, parent_id, pool, my_sides, limit,
+  //            priority ('urgent,high'), kinds ('bug,feature'), subtasks ('all' | 'top' | 'only'),
+  //            claimable (true: only rows the caller can claim now), lane ('planned' | 'backlog') }
+  // ready=true lists what the caller can claim now: To do (lane planned) and Backlog.
+  // Lists take arrays too; they go out comma-joined.
   tasks: (filters) => request('/tasks', { params: filters }),
   // One page of the same list. Extra filters: statuses ('blocked,needs_confirm'),
   // sort ('updated'), awaiting_decision (+ to: 'leads').
   tasksPage: (filters, pageNumber, pageSize) => page('/tasks', filters, pageNumber, pageSize),
+  // Counts for the filter menus, for the same filters as the list (no paging):
+  // { total, status, priority, kind, side, area, lane: {planned, backlog}, claimable, subtasks }.
+  facets: (filters) => request('/tasks/facets', { params: filters }),
   inbox: () => request('/tasks/inbox'),
   task: (id) => request(`/tasks/${id}`),
   // Skeleton, required headings and starter criteria per task kind.
@@ -190,6 +210,10 @@ export const api = {
   addCriterion: (id, text) => request(`/tasks/${id}/criteria`, { method: 'POST', body: { text } }),
   updateCriterion: (id, n, payload) =>
     request(`/tasks/${id}/criteria/${n}`, { method: 'PATCH', body: payload }),
+  // Take one part: the server makes a subtask for criterion n and claims it for you.
+  // Answers the new subtask (with `warnings`). payload: { agent?, ttl_hours? }.
+  takePart: (id, n, payload = {}) =>
+    request(`/tasks/${id}/criteria/${n}/take`, { method: 'POST', body: payload }),
 
   addGitLink: (id, payload) => request(`/tasks/${id}/git`, { method: 'POST', body: payload }),
 

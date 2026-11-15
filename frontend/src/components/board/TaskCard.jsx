@@ -13,10 +13,13 @@ import {
   DEPLOY_LABELS,
   KIND_LABELS,
   PRIORITY_LABELS,
+  QUIET_CLAIM_BLOCKS,
   SIDE_LABELS,
   STATUS_SHORT_LABELS,
-  canClaim,
   claimIsLive,
+  claimableNow,
+  groupPeople,
+  personRoleText,
   taskKey,
 } from '../../lib/constants'
 import { formatDate, formatDateTime, initials, isOverdue } from '../../lib/format'
@@ -27,8 +30,10 @@ import {
   ClaimIcon,
   ClockIcon,
   DeployIcon,
+  HandIcon,
   LockIcon,
   OpenIcon,
+  PartIcon,
   QuestionIcon,
   SubtasksIcon,
 } from './BoardIcons'
@@ -75,6 +80,58 @@ function Assignees({ task, user, compact = false }) {
     </span>
   )
 }
+
+/**
+ * Everyone on the task, subtask parts included (`task.people`): up to three
+ * avatars and "+n". Falls back to the assignees for answers without `people`.
+ */
+function People({ task, user, compact = false }) {
+  const people = groupPeople(task.people)
+  if (people.length === 0) return <Assignees task={task} user={user} compact={compact} />
+  const shown = people.slice(0, 3)
+  const extra = people.length - shown.length
+  const describe = (person) =>
+    `${person.name}${person.handle ? ` (@${person.handle})` : ''}: ${person.entries
+      .map((entry) => personRoleText(entry, task.id))
+      .join(', ')}`
+  return (
+    <span className="flex items-center gap-1.5" title={people.map(describe).join('\n')}>
+      <span className="flex -space-x-1">
+        {shown.map((person) => (
+          <Avatar key={person.handle || person.name} person={person} me={Boolean(user?.handle) && person.handle === user.handle} />
+        ))}
+        {extra > 0 && (
+          <span className="tabular grid h-5 min-w-5 place-items-center rounded-full bg-surface-raised px-1 text-[9px] font-semibold text-ink-secondary ring-1 ring-hairline">
+            +{extra}
+          </span>
+        )}
+      </span>
+      <span className="sr-only">On this task: {people.map(describe).join('; ')}</span>
+    </span>
+  )
+}
+
+/** Why the viewer cannot claim this task, as a small icon with the reason as its tooltip. */
+function ClaimBlock({ task, compact = false }) {
+  if (!task.claim_block_text || QUIET_CLAIM_BLOCKS.has(task.claim_block)) return null
+  const Glyph = task.claim_block === 'claimed' || task.claim_block === 'parts_taken' ? ClaimIcon : task.claim_block === 'waiting_decision' ? QuestionIcon : LockIcon
+  return (
+    <span
+      title={task.claim_block_text}
+      className="inline-flex shrink-0 items-center gap-1 text-[11px] text-ink-muted"
+    >
+      <Glyph className="h-3 w-3" />
+      {/* A claim already shows its holder on the card, so only the icon here. */}
+      {compact || task.claim_block === 'claimed' ? (
+        <span className="sr-only">{task.claim_block_text}</span>
+      ) : (
+        <span className="max-w-[10rem] truncate">{task.claim_block_text}</span>
+      )}
+    </span>
+  )
+}
+
+const LANE_LABELS = { planned: 'Planned', backlog: 'Backlog' }
 
 function ClaimBadge({ task }) {
   if (!claimIsLive(task)) return null
@@ -183,6 +240,15 @@ function CompactIcons({ task, overdue }) {
           className="text-series1"
         />
       )}
+      {task.parts_total > 0 && (
+        <MiniIcon
+          icon={PartIcon}
+          label={`${task.parts_taken ?? 0} of ${task.parts_total} parts taken`}
+          className={task.parts_taken >= task.parts_total ? 'text-good' : 'text-ink-muted'}
+        >
+          {task.parts_taken ?? 0}/{task.parts_total}
+        </MiniIcon>
+      )}
       {task.restricted && <MiniIcon icon={LockIcon} label="Restricted" />}
     </>
   )
@@ -210,13 +276,15 @@ export default function TaskCard({
   onSelect = null,
   onClaim = null,
   claiming = false,
+  showLane = false,
 }) {
   const overdue = isOverdue(task.due_date, task.status)
   const met = (task.criteria_total ?? 0) - (task.criteria_open ?? 0)
   const mine = isMine(task, user)
   const compact = density === 'compact'
-  const claimable =
-    Boolean(onClaim) && canClaim(task, user) && !claimIsLive(task) && !(task.blocked_by?.length > 0)
+  // Your own claim renews from the detail view; the card offers Take to others.
+  const claimable = Boolean(onClaim) && claimableNow(task, user) && !mine
+  const lane = showLane && LANE_LABELS[task.lane]
 
   function handleClick(event) {
     if (event.target.closest('button, input, a, label')) return
@@ -231,21 +299,29 @@ export default function TaskCard({
     }
   }
 
+  // Take stays visible; a task nobody can start shows why instead.
+  const take = claimable ? (
+    <button
+      type="button"
+      disabled={claiming}
+      onClick={() => onClaim(task)}
+      aria-label={`Take task ${taskKey(task.id)}`}
+      title={
+        task.status === 'backlog' || task.status === 'to_do'
+          ? 'Claim this task: it moves to In progress and is yours'
+          : 'Claim this task'
+      }
+      className={`${quickButton} border-series1/50 text-series1`}
+    >
+      <HandIcon className="h-3 w-3" />
+      {claiming ? 'Taking…' : 'Take'}
+    </button>
+  ) : onClaim && !mine ? (
+    <ClaimBlock task={task} compact={compact} />
+  ) : null
+
   const actions = (
     <span className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
-      {claimable && (
-        <button
-          type="button"
-          disabled={claiming}
-          onClick={() => onClaim(task)}
-          aria-label={`Claim task #${task.id}`}
-          title="Take a claim on this task"
-          className={quickButton}
-        >
-          <ClaimIcon className="h-3 w-3" />
-          {claiming ? 'Claiming…' : 'Claim'}
-        </button>
-      )}
       <button
         type="button"
         onClick={() => onOpen(task)}
@@ -310,6 +386,7 @@ export default function TaskCard({
       {compact ? (
         <div className="mt-1.5 flex items-center gap-2">
           <span className="tabular text-[11px] text-ink-muted">{taskKey(task.id)}</span>
+          {lane && <span className="text-[11px] text-ink-muted">{lane}</span>}
           {showStatus && (
             <span className="text-[11px] text-ink-secondary">{STATUS_SHORT_LABELS[task.status] ?? task.status}</span>
           )}
@@ -321,8 +398,9 @@ export default function TaskCard({
           <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
             <CompactIcons task={task} overdue={overdue} />
           </span>
+          {take}
           {actions}
-          <Assignees task={task} user={user} compact />
+          <People task={task} user={user} compact />
         </div>
       ) : (
         <>
@@ -335,6 +413,14 @@ export default function TaskCard({
                 </span>
               )}
             </span>
+            {lane && (
+              <span
+                title={task.lane === 'planned' ? 'Planned: in To do, take it first' : 'In the backlog'}
+                className="text-[11px] text-ink-muted"
+              >
+                {lane}
+              </span>
+            )}
             {showStatus && <StatusBadge status={task.status} />}
             {task.area && (
               <span dir="auto" title={`Area: ${task.area.slug}`}
@@ -370,6 +456,15 @@ export default function TaskCard({
                 {met}/{task.criteria_total}
               </CountChip>
             )}
+            {task.parts_total > 0 && (
+              <CountChip
+                title="Parts someone has taken, out of all parts. Open the task to take one."
+                tone={task.parts_taken >= task.parts_total ? 'good' : 'muted'}
+              >
+                <PartIcon className="h-3 w-3" />
+                parts {task.parts_taken ?? 0}/{task.parts_total} taken
+              </CountChip>
+            )}
             {task.open_questions > 0 && (
               <CountChip tone="warning">
                 <QuestionIcon className="h-3 w-3" />
@@ -385,12 +480,13 @@ export default function TaskCard({
           )}
 
           <div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-hairline pt-2">
-            <Assignees task={task} user={user} />
+            <People task={task} user={user} />
             <span
               className={`tabular me-auto whitespace-nowrap text-[11px] ${overdue ? 'text-critical' : 'text-ink-muted'}`}
             >
               {task.due_date ? `Due ${formatDate(task.due_date)}` : 'No due date'}
             </span>
+            {take}
             {actions}
           </div>
         </>
