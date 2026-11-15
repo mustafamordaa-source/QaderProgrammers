@@ -174,7 +174,7 @@ def _is_worker(task: Task, user: User) -> bool:
         return False
     if user.id in task.assignee_ids:
         return True
-    return task.pool and task.claimed_by == user.id and task.claim_is_live(utcnow())
+    return task.open_to_side and task.claimed_by == user.id and task.claim_is_live(utcnow())
 
 
 def _assert_worker(task: Task, user: User) -> None:
@@ -305,8 +305,10 @@ def _claim_block(task: Task, user: User, now) -> tuple[str | None, str | None]:
         return "closed", f"The task is {st.value.replace('_', ' ')}"
     # Who may take it comes before what it waits on.
     if not (user.is_lead or user.id in task.assignee_ids):
-        if not task.pool:
-            return "not_pool", "Assigned work: a lead assigns it or opens it to the pool"
+        if task.assign_only:
+            return "assign_only", "A lead assigns this one to a chosen person"
+        if not task.open_to_side:
+            return "not_pool", "Assigned to someone else: ask a lead before you take it"
         if task.side is not None and user.sides and task.side.value not in user.sides:
             sides = ", ".join(SIDE_LABELS.get(x, x) for x in user.sides)
             return "other_side", f"{SIDE_LABELS[task.side.value]} work; your profile lists {sides}"
@@ -372,8 +374,10 @@ def _take_block(task: Task, criterion: Criterion, user: User) -> str | None:
         return "Waits for " + ", ".join(f"HUB-{b}" for b in blockers)
     if user.is_lead or user.id in task.assignee_ids:
         return None
-    if not task.pool:
-        return "Assigned work: a lead assigns it or opens it to the pool"
+    if task.assign_only:
+        return "A lead assigns this one to a chosen person"
+    if not task.open_to_side:
+        return "Assigned to someone else: ask a lead before you take it"
     if task.side is not None and user.sides and task.side.value not in user.sides:
         sides = ", ".join(SIDE_LABELS.get(x, x) for x in user.sides)
         return f"{SIDE_LABELS[task.side.value]} work; your profile lists {sides}"
@@ -607,10 +611,10 @@ def create_task(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only a leader assigns tasks; yours goes to the backlog for triage",
             )
-        if payload.restricted or payload.pool:
+        if payload.restricted or payload.pool or payload.assign_only:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only a leader marks a task restricted or pool",
+                detail="Only a leader marks a task restricted, pool or assign-only",
             )
     _validate_assignees(db, payload.assignee_1_id, payload.assignee_2_id)
 
@@ -713,6 +717,7 @@ def create_task(
         areas=payload.areas or [],
         restricted=bool(payload.restricted),
         pool=bool(payload.pool),
+        assign_only=bool(payload.assign_only),
         created_kind=auth.kind,
         created_agent=auth.agent,
         kind=payload.kind,
@@ -930,7 +935,7 @@ def _filtered(
             or_(Task.claimed_by.is_(None), Task.claim_expires_at <= now),
         )
         if not user.is_lead:
-            stmt = stmt.where(or_(mine_filter, Task.pool.is_(True)))
+            stmt = stmt.where(or_(mine_filter, Task.open_to_side))
     if lane:
         stmt = stmt.where(Task.status == (S.to_do if lane == "planned" else S.backlog))
     wanted_priorities = _comma(priority, Priority, "priority")
@@ -974,7 +979,7 @@ def _filtered(
     if parent_id is not None:
         stmt = stmt.where(Task.parent_id == parent_id)
     if pool is not None:
-        stmt = stmt.where(Task.pool.is_(pool))
+        stmt = stmt.where(Task.open_to_side if pool else ~Task.open_to_side)
     if my_sides:
         stmt = stmt.where(Task.side.in_(list(user.sides or [])))
     if area:
@@ -1234,7 +1239,7 @@ def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> 
         task = Task(
             title=title, description=description, priority=item.priority, status=item.status,
             created_by=auth.user.id, side=item.side, tags=item.tags or [], areas=[],
-            restricted=item.restricted, pool=item.pool, created_kind=auth.kind, created_agent=auth.agent,
+            restricted=item.restricted, pool=item.pool, assign_only=item.assign_only, created_kind=auth.kind, created_agent=auth.agent,
             kind=item.kind, fingerprint=fingerprint, area_id=area.id if area else None,
         )
         if item.points is not None:
@@ -1254,7 +1259,7 @@ def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> 
     wanted: dict[str, object] = {"title": title}
     if "description" in sent:
         wanted["description"] = description
-    for field in ("kind", "priority", "side", "restricted", "points", "pool"):
+    for field in ("kind", "priority", "side", "restricted", "points", "pool", "assign_only"):
         if field in sent and getattr(item, field) is not None:
             wanted[field] = getattr(item, field)
     if "tags" in sent:
@@ -1706,7 +1711,7 @@ def update_task(
     for field, value in fields.items():
         if field in _LINTED:
             value = lint.clean(value, field=field)
-        if field in {"restricted", "pool"} and value is None:
+        if field in {"restricted", "pool", "assign_only"} and value is None:
             continue
         if field in {"tags", "areas"} and value is None:
             value = []
@@ -1942,7 +1947,7 @@ def _refuse_claim(task: Task, user: User) -> None:
     code, text = _claim_block(task, user, utcnow())
     if code is None or code == "claimed":
         return
-    forbidden = {"viewer", "not_pool", "other_side"}
+    forbidden = {"viewer", "not_pool", "other_side", "assign_only"}
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN if code in forbidden else status.HTTP_409_CONFLICT,
         detail=text,
@@ -2073,9 +2078,10 @@ def take_part(
     if reason is not None:
         code = ("taken" if reason.startswith("Taken in") else "claimed" if "holds the whole task" in reason
                 else "waiting_decision" if "decision" in reason
-                else "other_side" if "your profile lists" in reason else "not_pool" if "a lead assigns" in reason
+                else "other_side" if "your profile lists" in reason else "not_pool" if "ask a lead before" in reason
+                else "assign_only" if "A lead assigns this one" in reason
                 else "blocked_by" if reason.startswith("Waits for") else "refused")
-        forbidden = user.is_read_only or user.is_bot or code in ("other_side", "not_pool")
+        forbidden = user.is_read_only or user.is_bot or code in ("other_side", "not_pool", "assign_only")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN if forbidden else status.HTTP_409_CONFLICT,
                             detail=reason, headers={"X-Claim-Block": code})
 
@@ -2098,10 +2104,11 @@ def take_part(
         areas=list(parent.areas or []),
         area_id=parent.area_id,
         restricted=parent.restricted,
-        pool=parent.pool,
+        pool=parent.open_to_side,
+        assign_only=parent.assign_only,
         # Restricted or assigned work stays with the taker: they can open it, and a lapsed
         # claim does not hand it to the whole side.
-        assignee_1_id=user.id if (parent.restricted or not parent.pool) else None,
+        assignee_1_id=user.id if (parent.restricted or not parent.open_to_side) else None,
         kind=parent.kind,
         created_kind=auth.kind,
         created_agent=auth.agent,

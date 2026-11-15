@@ -249,7 +249,7 @@ const SECTIONS = [
         type: 'list',
         items: [
           'Restricted: only leads, admins and the assignees see the task. Its notifications carry no text.',
-          'Pool: any member can claim it, not only the assignees. Pool parts from a split go only to people whose Works on lists that side.',
+          'Open by default: a task with no assignee can be taken by anyone whose Works on lists its side. Pool: open even when it has assignees. Lead assigns: sensitive work nobody takes until a lead assigns a person.',
           'Only a lead marks a task restricted or pool.',
         ],
       },
@@ -282,7 +282,7 @@ const SECTIONS = [
         type: 'list',
         items: [
           'Claim a task before you start: the Claim button on the task, or `qhub claim`.',
-          'You can claim backlog and to_do tasks that are assigned to you, and pool tasks for your sides; claiming moves them to in_progress. Renew a claim in in_progress. Leads can claim any of them. See Taking work below.',
+          'You can claim backlog and to_do tasks that are assigned to you, or that have no assignee (or are pool) and sit on your sides; claiming moves them to in_progress. Renew a claim in in_progress. Leads can claim any of them. See Taking work below.',
           'A lease lasts 2 hours by default and 8 at most. Claim again to renew it.',
           'A task holds one claim at a time, by one person and one agent name. A second agent gets 409, even when it runs under your account. Give each agent session its own name and one task at a time.',
           'The hub warns when you go over your WIP limit or when another claimed task shares an area.',
@@ -333,7 +333,7 @@ const SECTIONS = [
     blocks: [
       {
         type: 'p',
-        text: 'Pick work up yourself instead of waiting to be assigned. A card you can start shows a Take button. Press it and the task moves to In progress with your claim on it. Imported tasks are pool tasks, so anyone on that side can take them.',
+        text: 'Pick work up yourself instead of waiting to be assigned. A card you can start shows a Take button. Press it and the task moves to In progress with your claim on it. Any task with no assignee is open, so anyone on that side can take it; a lead ticks Lead assigns to keep sensitive work for a chosen person.',
       },
       { type: 'h3', text: 'Claim from Backlog or To do' },
       {
@@ -358,7 +358,8 @@ const SECTIONS = [
           ['Blocked by another task', 'Another open task blocks this one. Finish or take that one first.'],
           ['Someone holds the claim', 'Pick another task or ask them on the task. A claim runs out after its lease.'],
           ['Others work on its parts', 'People hold some of its parts. Take a free part in the Criteria tab instead of the whole task.'],
-          ['Another side', 'A pool task for a side outside your Works on. Ask a lead to add the side to your profile.'],
+          ['Another side', 'Open work for a side outside your Works on. Ask a lead to add the side to your profile.'],
+          ['Lead assigns', 'Sensitive work a lead gives to a chosen person. Ask a lead if you think it should be you.'],
           ['Assigned to someone else', 'The task is not in the pool. Ask a lead if you should take it.'],
           ['In review, proposed or closed', 'Nothing to claim: it waits for review or triage, or it is finished.'],
         ],
