@@ -68,6 +68,7 @@ function EditForm({ ctx, programmers, onDone }) {
     due_date: toDateInputValue(task.due_date),
     restricted: Boolean(task.restricted),
     pool: Boolean(task.pool),
+    assign_only: Boolean(task.assign_only),
     assignee_1_id: task.assignee_1_id ? String(task.assignee_1_id) : '',
     assignee_2_id: task.assignee_2_id ? String(task.assignee_2_id) : '',
     kind: task.kind ?? 'task',
@@ -106,6 +107,7 @@ function EditForm({ ctx, programmers, onDone }) {
       if (form.due_date !== toDateInputValue(task.due_date)) out.due_date = due
       put('restricted', form.restricted, Boolean(task.restricted))
       put('pool', form.pool, Boolean(task.pool))
+      put('assign_only', form.assign_only, Boolean(task.assign_only))
       put('kind', form.kind, task.kind ?? 'task')
       // 0 clears the parent.
       const parentId = form.parent?.id ?? null
@@ -322,6 +324,10 @@ function EditForm({ ctx, programmers, onDone }) {
             <label className="inline-flex items-center gap-2">
               <input type="checkbox" checked={form.pool} onChange={(e) => update('pool', e.target.checked)} />
               Pool (any member may claim)
+            </label>
+            <label className="inline-flex items-center gap-2">
+              <input type="checkbox" checked={form.assign_only} onChange={(e) => update('assign_only', e.target.checked)} />
+              Lead assigns (sensitive: nobody takes it until assigned)
             </label>
           </div>
         </>
@@ -643,7 +649,7 @@ export default function OverviewTab({ ctx }) {
       <aside className="space-y-4">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 lg:grid-cols-1">
           <Field label="Assigned to">
-            {assignees.length ? assignees.map(personName).join(' + ') : task.pool ? 'Pool' : 'Unassigned'}
+            {assignees.length ? assignees.map(personName).join(' + ') : task.assign_only ? 'Waits for a lead to assign' : 'Open: anyone on its side can take it'}
           </Field>
           {Array.isArray(task.people) && (
             <div className="col-span-2 lg:col-span-1">

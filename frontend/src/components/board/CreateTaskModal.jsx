@@ -58,6 +58,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
     status: 'to_do',
     restricted: false,
     pool: false,
+    assign_only: false,
     kind: 'task',
     use_template: true,
   })
@@ -172,6 +173,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
         assignee_2_id: form.assignee_2_id ? Number(form.assignee_2_id) : null,
         restricted: form.restricted,
         pool: form.pool,
+        assign_only: form.assign_only,
       })
     } else {
       payload.status = 'backlog'
@@ -577,7 +579,21 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
                 <span>
                   Pool
                   <span className="block text-xs text-ink-muted">
-                    Any member may claim it, not only its assignees.
+                    Any member may claim it, even with assignees. A task with no assignee is open anyway.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={form.assign_only}
+                  onChange={(event) => update('assign_only', event.target.checked)}
+                />
+                <span>
+                  Lead assigns
+                  <span className="block text-xs text-ink-muted">
+                    Sensitive work: nobody takes it until a lead assigns a person.
                   </span>
                 </span>
               </label>

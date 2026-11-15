@@ -74,9 +74,9 @@ export default function StatusActions({ ctx }) {
     else if (task.status === 'proposed' || task.status === 'backlog') {
       hint = !isLead ? 'A lead decides when this enters the plan.' : null
     } else if (!isWorker && !isLead && task.status !== 'done' && task.status !== 'dropped') {
-      hint = task.pool
-        ? 'Claim this pool task to work on it.'
-        : 'Only the people assigned to this task can move it.'
+      hint = task.claimable
+        ? 'Claim this task to work on it.'
+        : task.claim_block_text || 'Only the people assigned to this task can move it.'
     }
     return hint ? <p className="mt-4 text-xs text-ink-muted">{hint}</p> : null
   }

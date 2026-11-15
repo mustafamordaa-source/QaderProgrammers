@@ -50,10 +50,11 @@ class TestClaimFromBacklog:
         assert row["status"] == "needs_confirm" and row["claim_block"] == "waiting_decision"
         r = client.post(f"/tasks/{asked}/claim", headers=auth(alice), json={})
         assert r.status_code == 409 and "decision" in r.json()["detail"]
-        # A non-pool task nobody assigned to you.
-        closed = client.post("/tasks", headers=h, json={"title": "Lead work", "status": "to_do"}).json()
-        r = client.post(f"/tasks/{closed['id']}/claim", headers=auth(bob), json={})
-        assert r.status_code == 403 and "pool" in r.json()["detail"]
+        # A task assigned to someone else.
+        theirs = client.post("/tasks", headers=h, json={"title": "Lead work", "status": "to_do",
+                                                        "assignee_1_id": alice.id}).json()
+        r = client.post(f"/tasks/{theirs['id']}/claim", headers=auth(bob), json={})
+        assert r.status_code == 403 and r.headers["X-Claim-Block"] == "not_pool"
 
     def test_ready_lists_planned_then_backlog_by_priority(self, client, auth, leader, alice, db_session):
         _member(alice, db_session)
@@ -255,3 +256,40 @@ class TestReviewFixes:
         client.post(f"/tasks/{a}/claim", headers=auth(alice), json={})
         rows = client.get("/tasks?claimable=true", headers=auth(alice)).json()
         assert [r["id"] for r in rows] == [b]
+
+
+class TestOpenUnassigned:
+    def test_unassigned_task_is_open_to_its_side_without_the_pool_box(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        t = client.post("/tasks", headers=auth(leader), json={"title": "Plain work", "side": "be"}).json()
+        assert t["pool"] is False
+        row = client.get(f"/tasks/{t['id']}", headers=auth(alice)).json()
+        assert row["claimable"] is True
+        assert t["id"] in [r["id"] for r in client.get("/tasks?ready=true", headers=auth(alice)).json()]
+        assert t["id"] in [r["id"] for r in client.get("/tasks?pool=true", headers=auth(alice)).json()]
+        r = client.post(f"/tasks/{t['id']}/claim", headers=auth(alice), json={})
+        assert r.status_code == 200 and r.json()["status"] == "in_progress"
+        # The claim holder works on it like on a pool task.
+        assert client.patch(f"/tasks/{t['id']}", headers=auth(alice), json={"summary": "on it"}).status_code == 200
+
+    def test_assign_only_keeps_it_for_a_chosen_person(self, client, auth, leader, alice, bob, db_session):
+        _member(alice, db_session)
+        h = auth(leader)
+        t = client.post("/tasks", headers=h, json={"title": "Payments core", "side": "be", "assign_only": True,
+                                                   "criteria": ["Part A"]}).json()
+        assert t["assign_only"] is True
+        row = client.get(f"/tasks/{t['id']}", headers=auth(alice)).json()
+        assert row["claimable"] is False and row["claim_block"] == "assign_only"
+        assert row["criteria"][0]["can_take"] is False
+        r = client.post(f"/tasks/{t['id']}/claim", headers=auth(alice), json={})
+        assert r.status_code == 403 and r.headers["X-Claim-Block"] == "assign_only"
+        r = client.post(f"/tasks/{t['id']}/criteria/1/take", headers=auth(alice), json={})
+        assert r.status_code == 403 and r.headers["X-Claim-Block"] == "assign_only"
+        assert t["id"] not in [x["id"] for x in client.get("/tasks?ready=true", headers=auth(alice)).json()]
+        # Once a lead assigns it, the assignee claims it.
+        client.patch(f"/tasks/{t['id']}/assign", headers=h, json={"assignee_1_id": alice.id})
+        assert client.post(f"/tasks/{t['id']}/claim", headers=auth(alice), json={}).status_code == 200
+
+    def test_only_a_lead_sets_assign_only(self, client, auth, alice, db_session):
+        r = client.post("/tasks", headers=auth(alice), json={"title": "Mine", "assign_only": True})
+        assert r.status_code == 403

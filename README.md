@@ -185,14 +185,17 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
 - **Claim from the plan or the backlog**: a member claims a `to_do` or
   `backlog` task and it moves to `in_progress`. Tasks waiting for a decision
   (`needs_confirm`), parked as blocked, in review, proposed or closed cannot be
-  claimed. Imported tasks are pool tasks (`pool: true` by default), so anyone
-  whose "Works on" includes the task's side can take them.
+  claimed. A task with no assignee that is not restricted is open to its side
+  without the pool box: anyone whose "Works on" includes the side can take it.
+  `pool: true` keeps a task open even with assignees. A lead ticks
+  `assign_only` ("Lead assigns") for sensitive work: nobody claims it or takes
+  its parts until a lead assigns a person (`claim_block: assign_only`).
 - **Free to take** (`GET /tasks?ready=true`): what you can claim now, planned
   (`to_do`) first, then backlog, each by priority, then oldest first. Each row
   carries `lane` (`planned` or `backlog`); `lane=planned` keeps only the plan.
 - **Why not**: every task row (list, detail, brief) tells the caller
   `claimable`, plus `claim_block` (a code: `waiting_decision`, `other_side`,
-  `not_pool`, `blocked_by`, `claimed`, `parts_taken`, `in_review`, `blocked`,
+  `not_pool`, `assign_only`, `blocked_by`, `claimed`, `parts_taken`, `in_review`, `blocked`,
   `proposed`, `closed`, `viewer`) and `claim_block_text` (one sentence). A refused claim
   answers 403 or 409 with that sentence in `detail` and the code in the
   `X-Claim-Block` header.

@@ -466,6 +466,7 @@ class TaskOut(ORMModel):
     version: int = 1
     restricted: bool = False
     pool: bool = False
+    assign_only: bool = False
     resume_status: TaskStatus | None = None
     created_kind: ActorKind = ActorKind.human
     created_agent: str | None = None
@@ -573,6 +574,8 @@ class _TaskHubFields(BaseModel):
     summary: str | None = Field(default=None, max_length=4_000)
     restricted: bool | None = None
     pool: bool | None = None
+    # Only a lead's chosen assignee takes it (leads only).
+    assign_only: bool | None = None
     # Product area slug (GET /areas lists them); "" clears it.
     area: str | None = None
 
@@ -660,6 +663,8 @@ class ImportTask(BaseModel):
     restricted: bool = False
     # Pool tasks can be claimed by anyone on their side. Imports default to the pool.
     pool: bool = True
+    # Sensitive work a lead assigns by hand.
+    assign_only: bool = False
     # Used on create only; a later import never moves the task.
     status: TaskStatus = TaskStatus.backlog
     # A question for a lead. It parks the task in needs_confirm until answered.
