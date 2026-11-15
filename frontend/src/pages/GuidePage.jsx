@@ -283,13 +283,13 @@ const SECTIONS = [
         items: [
           'Claim a task before you start: the Claim button on the task, or `qhub claim`.',
           'You can claim backlog and to_do tasks that are assigned to you, or that have no assignee and sit on your sides; claiming moves them to in_progress. Renew a claim in in_progress. Leads can claim any of them. See Taking work below.',
-          'A lease lasts 2 hours by default and 8 at most. Claim again to renew it.',
+          'A claim follows your activity. Each thing you do on the task (a comment, a part ticked, a commit or PR link, a status move, a hand-back) restarts its clock. After 24 hours with nothing, you get a reminder in the hub and by email. After 48 hours, the hub frees the claim and the task goes back to Backlog or To do, where anyone on its side can take it; you and the leads are told.',
           'A task holds one claim at a time, by one person and one agent name. A second agent gets 409, even when it runs under your account. Give each agent session its own name and one task at a time.',
           'The hub warns when you go over your WIP limit or when another claimed task shares an area.',
           'When you stop early, comment on what is left, then release the claim.',
         ],
       },
-      { type: 'code', text: 'qhub claim 12 --branch feat/HUB-12-csv-export\nqhub claim 12 --hours 4\nqhub release 12' },
+      { type: 'code', text: 'qhub claim 12 --branch feat/HUB-12-csv-export\nqhub comment 12 "Export works; tests next"\nqhub release 12' },
       { type: 'h3', text: 'Questions that pause a task' },
       {
         type: 'p',
@@ -356,7 +356,7 @@ const SECTIONS = [
         rows: [
           ['Waiting for a decision', 'A lead has to answer a question first. Read the Discussion tab.'],
           ['Blocked by another task', 'Another open task blocks this one. Finish or take that one first.'],
-          ['Someone holds the claim', 'Pick another task or ask them on the task. A claim runs out after its lease.'],
+          ['Someone holds the claim', 'Pick another task or ask them on the task. A claim is freed after 48 hours without activity.'],
           ['Others work on its parts', 'People hold some of its parts. Take a free part in the Criteria tab instead of the whole task.'],
           ['Another side', 'Open work for a side outside your Works on. Ask a lead to add the side to your profile.'],
           ['Lead assigns', 'Sensitive work a lead gives to a chosen person. Ask a lead if you think it should be you.'],

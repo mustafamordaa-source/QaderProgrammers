@@ -57,7 +57,11 @@ def record(
     event_type: EventType,
     **kwargs: Any,
 ) -> TaskEvent:
-    """`log_event` with the actor taken from the request's Auth."""
+    """`log_event` with the actor taken from the request's Auth. When the actor
+    holds the task's claim, the activity restarts the claim's idle clock."""
+    from app.claims import renew_on_activity
+
+    renew_on_activity(db, task_id, auth.user.id)
     return log_event(
         db,
         task_id=task_id,

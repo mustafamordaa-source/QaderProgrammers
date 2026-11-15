@@ -304,8 +304,11 @@ is a channel on top:
 2. The agent sends `Authorization: Bearer qhub_...` and, on every write,
    `X-Agent: <agent name>`. Everything it writes is marked `actor_kind=agent`
    with that name; nobody can set that flag by hand.
-3. `POST /tasks/{id}/claim` takes a lease (2 hours by default, 8 at most,
-   renewed by claiming again). One SQL statement decides the race, so a
+3. `POST /tasks/{id}/claim` takes a claim that follows activity: every event
+   the holder records restarts a 48-hour clock. After 24 idle hours the holder
+   gets a reminder (in the hub and by email); after 48 the hub frees the claim
+   and sends the task back to its lane, telling the holder and the leads
+   (`CLAIM_IDLE_WARN_HOURS`, `CLAIM_IDLE_FREE_HOURS`, `CLAIM_SWEEP_SECONDS`). One SQL statement decides the race, so a
    second agent gets `409`. Claims warn when a person goes over their WIP
    limit or another claimed task shares a file area.
 4. `GET /tasks/{id}/brief` returns what an agent needs in about 2 KB.

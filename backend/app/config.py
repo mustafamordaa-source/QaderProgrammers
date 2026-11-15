@@ -40,9 +40,14 @@ class Settings(BaseSettings):
     # Replies a bot may post in 24 hours on tasks it did not propose (threads
     # where someone tagged it or asked it). 0 turns bot replies off.
     bot_replies_per_day: int = 40
-    # Claim lease, in hours.
-    claim_default_hours: float = 2
-    claim_max_hours: float = 8
+    # Claims follow activity: each thing the holder does restarts the clock.
+    # After the warn hours without activity the holder gets a reminder; after
+    # the free hours the claim is freed and the task goes back to its lane.
+    claim_idle_warn_hours: float = 24
+    claim_idle_free_hours: float = 48
+    # How often the background sweep runs, and "off" to stop it.
+    claim_sweep_seconds: int = 600
+    claim_sweeper: str = "on"
     # Most tasks one POST /tasks/import call may carry.
     import_max_tasks: int = 200
     # Comma-separated ID prefixes the text lint refuses (for example the

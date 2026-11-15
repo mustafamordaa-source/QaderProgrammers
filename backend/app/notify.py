@@ -32,6 +32,8 @@ MENTION_RE = re.compile(r"(?<![\w@.])@([a-z0-9][a-z0-9_-]{1,39})\b", re.IGNORECA
 LEAD_ONLY_KINDS = {NotifyKind.review, NotifyKind.proposal}
 # The only kinds a bot receives: the ones that ask it to reply.
 BOT_KINDS = {NotifyKind.mention, NotifyKind.question}
+# Sent by the hub about a person's own claims; not a setting.
+CLAIM_KINDS = {NotifyKind.claim_idle, NotifyKind.claim_freed}
 
 
 def mentioned_handles(text: str | None) -> set[str]:
@@ -41,6 +43,9 @@ def mentioned_handles(text: str | None) -> set[str]:
 def wants_email(user: User, kind: NotifyKind) -> bool:
     if not user.email_notifications or not settings.email_enabled:
         return False
+    if kind in CLAIM_KINDS:
+        # About work the person holds: always sent while email is on.
+        return True
     kinds = user.notify_kinds or list(DEFAULT_EMAIL_KINDS)
     return kind.value in kinds
 

@@ -48,6 +48,7 @@ def _relaxed_rate_limits(monkeypatch):
     monkeypatch.setattr(settings, "smtp_host", "")
     monkeypatch.setattr(settings, "smtp_from", "")
     monkeypatch.setattr(settings, "email_sender", "off")
+    monkeypatch.setattr(settings, "claim_sweeper", "off")
     yield
     ratelimit.reset()
 

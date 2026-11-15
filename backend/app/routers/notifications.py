@@ -13,7 +13,7 @@ from app import mailer, ratelimit
 from app.config import settings
 from app.deps import AuthCtx, CurrentUser, DbSession, require_admin, require_human
 from app.models import DEFAULT_EMAIL_KINDS, ActorKind, Notification, NotifyKind, User, utcnow
-from app.notify import LEAD_ONLY_KINDS
+from app.notify import CLAIM_KINDS, LEAD_ONLY_KINDS
 from app.paging import Page, count_rows
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
@@ -130,7 +130,7 @@ def mark_read(payload: ReadRequest, user: CurrentUser, db: DbSession) -> dict[st
 
 
 def _available(user: User) -> list[NotifyKind]:
-    return [k for k in NotifyKind if user.is_lead or k not in LEAD_ONLY_KINDS]
+    return [k for k in NotifyKind if (user.is_lead or k not in LEAD_ONLY_KINDS) and k not in CLAIM_KINDS]
 
 
 def _prefs(user: User) -> Preferences:
