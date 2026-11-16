@@ -297,6 +297,11 @@ class SplitPart(BaseModel):
     points: int | None = None
     description: str | None = Field(default=None, max_length=20_000)
     criteria: list[str] = Field(default_factory=list, max_length=30)
+    # Parent criteria (by number) this part carries: their text is copied in, and each one
+    # not yet linked points at this part, so approving the part marks it met.
+    parts_from: list[int] = Field(default_factory=list, max_length=30)
+    # Text put before each copied criterion, e.g. "API half: ".
+    parts_prefix: dict[int, str] = Field(default_factory=dict)
 
     _check_points = field_validator("points")(staticmethod(lambda v: _validate_points(v)))
 

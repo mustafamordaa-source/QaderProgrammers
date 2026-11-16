@@ -264,7 +264,11 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   claim it. `order` (`[{"before": "be", "after": "fe"}]`) makes one part
   block another. The parent lists every part with its side, people, claim
   and status; it starts when the first part starts, and leads hear when
-  every part is closed. A member may split a task they work on into open
+  every part is closed. A part may carry parent criteria (`parts_from`,
+  with an optional `parts_prefix` such as "API half: "): their text is copied
+  in and each is linked, so approving the part marks them met. Parts keep the
+  parent's lane, audience and Lead-assigns, and wait while the parent waits
+  for a decision. A member may split a task they work on into open
   parts; only a lead assigns parts.
 - **Fingerprints**: a creator (usually a scanner) may send a `fingerprint`
   such as `rule:path:symbol`. While a task with that fingerprint is open, a
