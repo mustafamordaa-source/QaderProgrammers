@@ -381,7 +381,7 @@ class TestAwaitingDecision:
         client.post("/tasks/import", headers=h, json={"tasks": [
             _task("QX-0001", question="Phase 0 or later?", question_to="lead")]})
         rows = client.get("/tasks?awaiting_decision=true", headers=h).json()
-        assert [q["text"] for t in rows for q in t["decision_questions"]] == ["Phase 0 or later?", "Decide for lead?"]
+        assert [q["text"] for t in rows for q in t["decision_questions"]] == ["Decide for lead?", "Phase 0 or later?"]  # oldest first
 
 
 def test_import_sets_points_and_rejects_off_scale(client, auth, leader):

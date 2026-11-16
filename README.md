@@ -208,6 +208,12 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
 - **Markdown**: descriptions, summaries, comments and evidence render as
   Markdown (the same safe renderer as documents: no HTML, no images), and
   the text boxes have a Preview tab.
+- **Sorting**: `GET /tasks?sort=created|updated|priority|points|due|title`
+  with optional `order=asc|desc`. Each sort has a natural direction: created
+  oldest first (the default), updated newest first, priority urgent first,
+  points easiest first, due soonest first (no date last), title A to Z. Ties
+  fall back to oldest first. `ready=true` keeps planned work above the
+  backlog and sorts inside each lane.
 - **Take one part**: `POST /tasks/{id}/criteria/{n}/take` turns acceptance
   criterion `n` into a subtask on the parent's side, links the part to it and
   claims it for you. One person per part, many people per task. When the
