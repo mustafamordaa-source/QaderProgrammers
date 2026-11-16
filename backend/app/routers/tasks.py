@@ -238,6 +238,7 @@ def _out(task: Task, model=TaskOut, user: User | None = None, **extra):
         mine = task.claim_is_live(now) and task.claimed_by == user.id
         row.claimable = code is None and not mine
         row.claim_block, row.claim_block_text = (None, None) if mine else (code, text)
+        row.can_assign = user.is_lead or _assign_block(task, user) is None
     for key, value in extra.items():
         setattr(row, key, value)
     return row
@@ -607,10 +608,10 @@ def create_task(
     is_leader = user.is_lead and not propose_only
 
     if not is_leader:
-        if payload.assignee_1_id or payload.assignee_2_id:
+        if (payload.assignee_1_id or payload.assignee_2_id) and propose_only:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only a leader assigns tasks; yours goes to the backlog for triage",
+                detail="A proposal has no assignee; a lead assigns it at triage",
             )
         if payload.restricted or payload.assign_only:
             raise HTTPException(
@@ -1860,15 +1861,30 @@ def assign_task(
     payload: TaskAssign,
     db: DbSession,
     auth: AuthCtx,
-    leader: User = Depends(require_leader),
 ) -> TaskDetailOut:
+    """Set who works on a task. Leads assign anything. A member may assign an
+    open task, or one they work on (assignee or claim holder), to any member,
+    for example a frontend developer handing the backend half to a backend
+    developer. Restricted and Lead-assigns tasks stay with the leads."""
     task = _get_task_or_404(db, task_id)
+    user = auth.user
+    _assert_visible(task, user)
+    if not user.is_lead:
+        reason = _assign_block(task, user)
+        if reason:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
     _validate_assignees(db, payload.assignee_1_id, payload.assignee_2_id)
 
     before = task.assignee_ids
     task.assignee_1_id = payload.assignee_1_id
     task.assignee_2_id = payload.assignee_2_id
     _touch(task)
+    now = utcnow()
+    if task.claim_is_live(now) and task.claimed_by not in task.assignee_ids:
+        # Handed to someone else: the old holder's claim ends here.
+        record(db, auth, task_id=task.id, event_type=EventType.released,
+               data={"holder": task.claimed_by, "agent": task.claim_agent, "reason": "reassigned"})
+        _clear_claim(task)
 
     record(
         db,
@@ -1882,6 +1898,22 @@ def assign_task(
     notify(db, auth, users=_people(db, new_people), task=task, kind=NotifyKind.assigned, text=task.summary or task.description)
     db.commit()
     return _detail(_get_task_or_404(db, task.id), auth.user)
+
+
+def _assign_block(task: Task, user: User) -> str | None:
+    """Why a member may not assign this task; None when they may."""
+    if user.is_read_only or user.is_bot:
+        return "Viewer and bot accounts cannot assign tasks"
+    if task.restricted:
+        return "Restricted work: only a lead assigns it"
+    if task.assign_only:
+        return "Lead assigns this one to a chosen person"
+    if task.status in CLOSED_STATUSES or task.status is S.proposed:
+        return f"A {task.status.value} task cannot be assigned"
+    mine = user.id in task.assignee_ids or (task.claimed_by == user.id and task.claim_is_live(utcnow()))
+    if task.assignee_ids and not mine:
+        return "Someone else is assigned; ask them or a lead to hand it over"
+    return None
 
 
 @router.post("/{task_id}/reject", response_model=TaskDetailOut)

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import WithPreview, { RichText } from '../../MarkdownPreview'
 import { api } from '../../../api/client'
 import { ActorBadge, CommentKindBadge, PlainText } from '../../Badges'
 import {
@@ -52,6 +53,7 @@ function ReplyForm({ ctx, parent, onDone }) {
           ))}
         </div>
       )}
+      <WithPreview value={body}>
       <MentionTextarea
         id={`reply-${parent.id}`}
         aria-label="Reply"
@@ -66,6 +68,7 @@ function ReplyForm({ ctx, parent, onDone }) {
         user={user}
         className={smallInputClass}
       />
+      </WithPreview>
       <MentionHint />
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onDone} className={secondaryButton}>Cancel</button>
@@ -102,7 +105,7 @@ function CommentView({ ctx, comment, replies = [], isReply = false }) {
         )}
         <time className="ms-auto text-xs text-ink-muted">{formatDateTime(comment.created_at)}</time>
       </div>
-      <PlainText className="mt-1.5 text-sm leading-relaxed">{comment.body}</PlainText>
+      <RichText className="mt-1.5 leading-relaxed">{comment.body}</RichText>
 
       {!isReadOnly && !isReply && (
         <div className="mt-2 flex flex-wrap gap-3">
@@ -226,6 +229,7 @@ function Composer({ ctx }) {
         </label>
       )}
 
+      <WithPreview value={body}>
       <MentionTextarea
         id="comment-body"
         aria-label="Comment"
@@ -240,6 +244,7 @@ function Composer({ ctx }) {
         placeholder={kind === 'question' ? 'What do you need to know?' : 'Write a comment. Type @ to mention someone.'}
         className={`${smallInputClass} ${kind === 'handback' ? 'font-mono text-xs' : ''}`}
       />
+      </WithPreview>
       <MentionHint />
       {kind === 'handback' && (
         <p className="text-xs text-ink-muted">
