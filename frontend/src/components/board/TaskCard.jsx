@@ -7,6 +7,7 @@ import {
   OverdueBadge,
   PointsBadge,
   PriorityBadge,
+  RequestedBadge,
   SideBadge,
   StatusBadge,
 } from '../Badges'
@@ -17,10 +18,13 @@ import {
   KIND_LABELS,
   PRIORITY_LABELS,
   QUIET_CLAIM_BLOCKS,
+  REQUESTER_BADGE_LABELS,
+  REQUESTER_GOLD_ICON,
   SIDE_LABELS,
   STATUS_SHORT_LABELS,
   claimIsLive,
   claimableNow,
+  isVipRequest,
   groupPeople,
   personRoleText,
   taskKey,
@@ -39,6 +43,7 @@ import {
   OpenIcon,
   PartIcon,
   QuestionIcon,
+  StarIcon,
   SubtasksIcon,
 } from './BoardIcons'
 import { isMine } from './boardLayout'
@@ -399,6 +404,17 @@ export default function TaskCard({
 
       {compact ? (
         <div className="mt-1.5 flex items-center gap-2">
+          {isVipRequest(task) && (
+            <span
+              title={`Requested by a ${REQUESTER_BADGE_LABELS[task.requested_by].toLowerCase()}${
+                task.requested_by_name ? `: ${task.requested_by_name}` : ''
+              }`}
+              className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-ink"
+            >
+              <StarIcon className={`h-3 w-3 ${REQUESTER_GOLD_ICON}`} />
+              {REQUESTER_BADGE_LABELS[task.requested_by]}
+            </span>
+          )}
           <span className="tabular text-[11px] text-ink-muted">{taskKey(task.id)}</span>
           {lane && <span className="text-[11px] text-ink-muted">{lane}</span>}
           {showStatus && (
@@ -447,6 +463,11 @@ export default function TaskCard({
               </span>
             )}
             {showStatus && <StatusBadge status={task.status} />}
+            <RequestedBadge
+              requestedBy={task.requested_by}
+              name={task.requested_by_name}
+              date={task.requested_at}
+            />
             {task.area && (
               <span dir="auto" title={`Area: ${task.area.slug}`}
                 className="inline-flex items-center rounded-full border border-series2/40 px-2 py-0.5 text-[11px] text-series2">

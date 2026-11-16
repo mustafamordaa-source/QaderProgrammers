@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
@@ -276,6 +276,17 @@ def _check_audience(v):
     return v
 
 
+def _check_requested(v):
+    from app.models import REQUESTERS
+
+    if v is None:
+        return v
+    v = v.strip().lower()
+    if v and v not in REQUESTERS:
+        raise ValueError(f"requested_by: one of {', '.join(REQUESTERS)}")
+    return v
+
+
 class TaskRef(ORMModel):
     id: int
     title: str
@@ -287,6 +298,7 @@ class TaskRef(ORMModel):
     claim_holder: str | None = None
     pool: bool = False
     audience: str | None = None
+    requested_by: str | None = None
     blocked_by: list[int] = []
 
 
@@ -498,6 +510,9 @@ class TaskOut(ORMModel):
     pool: bool = False
     assign_only: bool = False
     audience: str | None = None
+    requested_by: str | None = None
+    requested_by_name: str | None = None
+    requested_at: date | None = None
     resume_status: TaskStatus | None = None
     created_kind: ActorKind = ActorKind.human
     created_agent: str | None = None
@@ -569,6 +584,7 @@ class FacetsOut(BaseModel):
     audience: dict[str, int] = {}
     # Per area: matching tasks in it or any area below it.
     area_tree: dict[str, int] = {}
+    requested_by: dict[str, int] = {}
 
 
 class TaskDetailOut(TaskOut):
@@ -617,6 +633,20 @@ class _TaskHubFields(BaseModel):
     assign_only: bool | None = None
     # Who the problem reaches; "" clears it.
     audience: str | None = None
+    # Who asked for it (leads only); "" clears it.
+    requested_by: str | None = None
+    requested_by_name: str | None = Field(default=None, max_length=80)
+    requested_at: date | None = None
+
+    @field_validator("requested_by")
+    @classmethod
+    def _requested(cls, v):
+        return _check_requested(v)
+
+    @field_validator("requested_at", mode="before")
+    @classmethod
+    def _requested_at(cls, v):
+        return None if v == "" else v
 
     @field_validator("audience")
     @classmethod
@@ -710,6 +740,19 @@ class ImportTask(BaseModel):
     # Sensitive work a lead assigns by hand.
     assign_only: bool = False
     audience: str | None = None
+    requested_by: str | None = None
+    requested_by_name: str | None = Field(default=None, max_length=80)
+    requested_at: date | None = None
+
+    @field_validator("requested_by")
+    @classmethod
+    def _requested(cls, v):
+        return _check_requested(v)
+
+    @field_validator("requested_at", mode="before")
+    @classmethod
+    def _requested_at(cls, v):
+        return None if v == "" else v
 
     @field_validator("audience")
     @classmethod
@@ -902,6 +945,8 @@ class TaskBrief(BaseModel):
     audience: str | None = None
     # The product area's slug (its path is in GET /areas).
     area: str | None = None
+    requested_by: str | None = None
+    requested_by_name: str | None = None
     cross_side_ok: bool = False
     # For the caller: can they claim it, and if not, why (code + sentence).
     claimable: bool = False

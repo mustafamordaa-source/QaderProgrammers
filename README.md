@@ -210,7 +210,8 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   the text boxes have a Preview tab.
 - **Sorting**: `GET /tasks?sort=impact|created|updated|priority|points|due|title`
   with optional `order=asc|desc`. Each sort has a natural direction: impact
-  bugs first, then student-facing first (the default), created oldest first, updated newest first, priority urgent first,
+  manager and stakeholder requests first, then bugs, then student-facing
+  first (the default), created oldest first, updated newest first, priority urgent first,
   points easiest first, due soonest first (no date last), title A to Z. Ties
   fall back to oldest first. `ready=true` keeps planned work above the
   backlog and sorts inside each lane.
@@ -239,6 +240,11 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   open work first. Facets add `area_tree`: counts rolled up to every parent.
   The redesign lives under `platform-design`, one "Redesign: …" sub-area per
   product.
+- **Requested by**: leads mark who asked for a task (`requested_by`:
+  managers, stakeholders, team, scan, with an optional name and date). The
+  default Impact sort puts manager and stakeholder requests first, then bugs,
+  then everything else. Filter with `requested_by=managers,stakeholders`
+  (the board's Managers' list view); split halves copy it.
 - **Take one part**: `POST /tasks/{id}/criteria/{n}/take` turns acceptance
   criterion `n` into a subtask on the parent's side, links the part to it and
   claims it for you. One person per part, many people per task. When the

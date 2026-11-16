@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import WithPreview, { RichText } from '../../MarkdownPreview'
 import { api } from '../../../api/client'
-import { ActorBadge, AudienceBadge, DeployBadge, PlainText, TagBadge } from '../../Badges'
+import { ActorBadge, AudienceBadge, DeployBadge, PlainText, RequestedBadge, TagBadge } from '../../Badges'
 import AreaPicker from '../AreaPicker'
 import PointsPicker from '../PointsPicker'
 import TaskPicker from '../TaskPicker'
+import RequesterFields from '../RequesterFields'
 import { LockIcon } from '../BoardIcons'
 import CrossSideTake, { crossSideOpen } from '../CrossSideTake'
 import {
@@ -15,6 +16,7 @@ import {
   KIND_LABELS,
   PRIORITIES,
   PRIORITY_LABELS,
+  REQUESTER_LABELS,
   SIDES,
   SIDE_LABELS,
   TASK_KINDS,
@@ -22,6 +24,7 @@ import {
   canClaim,
   claimIsLive,
   groupPeople,
+  isVipRequest,
   personRoleText,
   splitList,
   taskIdList,
@@ -76,6 +79,9 @@ function EditForm({ ctx, programmers, onDone }) {
     assignee_1_id: task.assignee_1_id ? String(task.assignee_1_id) : '',
     assignee_2_id: task.assignee_2_id ? String(task.assignee_2_id) : '',
     kind: task.kind ?? 'task',
+    requested_by: task.requested_by ?? '',
+    requested_by_name: task.requested_by_name ?? '',
+    requested_at: (task.requested_at ?? '').slice(0, 10),
     parent: task.parent ?? (task.parent_id ? { id: task.parent_id, title: `Task #${task.parent_id}` } : null),
   })
   const hasChildren = (task.children_total ?? task.children?.length ?? 0) > 0
@@ -114,6 +120,10 @@ function EditForm({ ctx, programmers, onDone }) {
       put('restricted', form.restricted, Boolean(task.restricted))
       put('assign_only', form.assign_only, Boolean(task.assign_only))
       put('kind', form.kind, task.kind ?? 'task')
+      // "" clears who asked and the name; null clears the date.
+      put('requested_by', form.requested_by, task.requested_by ?? '')
+      put('requested_by_name', form.requested_by_name.trim(), task.requested_by_name ?? '')
+      if (form.requested_at !== (task.requested_at ?? '').slice(0, 10)) out.requested_at = form.requested_at || null
       // 0 clears the parent.
       const parentId = form.parent?.id ?? null
       if (parentId !== (task.parent_id ?? null)) out.parent_id = parentId ?? 0
@@ -297,6 +307,8 @@ function EditForm({ ctx, programmers, onDone }) {
               <input id="edit-due" type="date" value={form.due_date} onChange={(e) => update('due_date', e.target.value)} className={inputClass} />
             </div>
           </div>
+
+          <RequesterFields idPrefix="edit" value={form} onChange={update} inputClass={inputClass} />
 
           <PointsPicker id="edit-points" value={form.points} onChange={(points) => update('points', points)} />
 
@@ -741,6 +753,22 @@ export default function OverviewTab({ ctx }) {
           )}
           <Field label="Reaches">
             {task.audience ? <AudienceBadge audience={task.audience} /> : <span className="text-ink-muted">Not set</span>}
+          </Field>
+          <Field label="Requested by">
+            {isVipRequest(task) ? (
+              <RequestedBadge requestedBy={task.requested_by} name={task.requested_by_name} date={task.requested_at} />
+            ) : (
+              <span className={task.requested_by ? '' : 'text-ink-muted'}>
+                {REQUESTER_LABELS[task.requested_by] ?? 'Team (not set)'}
+              </span>
+            )}
+            {(task.requested_by_name || task.requested_at) && (
+              <span dir="auto" className="mt-1 block text-xs text-ink-secondary">
+                {[task.requested_by_name, task.requested_at ? formatDate(task.requested_at) : '']
+                  .filter(Boolean)
+                  .join(', ')}
+              </span>
+            )}
           </Field>
           <Field label="Due">{formatDate(task.due_date)}</Field>
           <Field label="Created">

@@ -5,6 +5,8 @@ import {
   KIND_LABELS,
   PRIORITIES,
   PRIORITY_LABELS,
+  REQUESTER_FILTER_VALUES,
+  REQUESTER_LABELS,
   SIDES,
   SIDE_LABELS,
   STATUSES,
@@ -26,6 +28,7 @@ import {
   QuestionIcon,
   SearchIcon,
   SideIcon,
+  StarIcon,
   StatusIcon,
   SubtasksIcon,
 } from './BoardIcons'
@@ -45,6 +48,13 @@ import { filtersMatch } from './useBoardPrefs'
 
 // Ready-made views. Each one replaces every filter, so it always shows the same board.
 export const VIEWS = [
+  {
+    key: 'managers',
+    label: 'Managers’ list',
+    icon: StarIcon,
+    title: 'What managers and stakeholders asked for',
+    filters: { requested_by: ['managers', 'stakeholders'] },
+  },
   {
     key: 'free',
     label: 'Free to take',
@@ -463,6 +473,11 @@ export default function BoardFilters({
       audience: filters.audience.filter((v) => v !== a),
     })
   }
+  for (const r of filters.requested_by) {
+    add(`requested-${r}`, `Requested by: ${REQUESTER_LABELS[r] ?? r}`, {
+      requested_by: filters.requested_by.filter((v) => v !== r),
+    })
+  }
   if (filters.side) add('side', SIDE_LABELS[filters.side] ?? filters.side, { side: '' })
   if (filters.area) {
     const path = areaPath(tree, filters.area)
@@ -611,6 +626,17 @@ export default function BoardFilters({
           facetParams={facetParams}
           omit={['audience']}
         />
+        <MultiMenu
+          icon={StarIcon}
+          label="Requested by"
+          values={filters.requested_by}
+          options={REQUESTER_FILTER_VALUES}
+          labels={REQUESTER_LABELS}
+          facetKey="requested_by"
+          onChange={(requested_by) => update({ requested_by })}
+          facetParams={facetParams}
+          omit={['requested_by']}
+        />
         <MenuChip
           icon={SideIcon}
           label="Side"
@@ -734,9 +760,9 @@ export default function BoardFilters({
                   onSearch('')
                   replace(pressed ? {} : view.filters)
                 }}
-                className={`${chipBase} shrink-0 ${chipTone(pressed, view.key === 'decision' ? 'series2' : 'series1')}`}
+                className={`${chipBase} shrink-0 ${chipTone(pressed, view.key === 'decision' ? 'series2' : view.key === 'managers' ? 'gold' : 'series1')}`}
               >
-                <Glyph />
+                <Glyph className={view.key === 'managers' ? 'h-3.5 w-3.5 text-warning' : undefined} />
                 {view.label}
               </button>
             )

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { AUDIENCE_FILTER_VALUES, PRIORITIES, STATUSES, TASK_KINDS } from '../../lib/constants'
+import { AUDIENCE_FILTER_VALUES, PRIORITIES, REQUESTER_FILTER_VALUES, STATUSES, TASK_KINDS } from '../../lib/constants'
 
 const PREFS_KEY = 'taskflow.board.prefs.v1'
 const DENSITIES = ['comfortable', 'compact']
@@ -134,6 +134,8 @@ export const EMPTY_FILTERS = {
   kind: [],
   // Who the task reaches; `none` means not set.
   audience: [],
+  // Who asked for the task; `none` means not set.
+  requested_by: [],
   // Impact by default: work that reaches students first, oldest first inside
   // each group. It is also the server's default.
   sort: 'impact',
@@ -142,7 +144,9 @@ export const EMPTY_FILTERS = {
 
 const FLAGS = ['mine', 'ready', 'decision', 'agents']
 const TEXTS = ['q', 'tag', 'side', 'area']
-const LISTS = { status: STATUSES, priority: PRIORITIES, kind: TASK_KINDS, audience: AUDIENCE_FILTER_VALUES }
+const LISTS = { status: STATUSES, priority: PRIORITIES, kind: TASK_KINDS, audience: AUDIENCE_FILTER_VALUES,
+  requested_by: REQUESTER_FILTER_VALUES,
+}
 const ONE_OF = {
   lane: ['planned', 'backlog'],
   subtasks: ['all', 'top', 'only'],

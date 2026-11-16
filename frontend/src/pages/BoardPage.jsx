@@ -112,6 +112,7 @@ export default function BoardPage() {
       kinds: filters.kind,
       priority: filters.priority,
       audience: filters.audience,
+      requested_by: filters.requested_by,
       subtasks: filters.subtasks === 'all' ? undefined : filters.subtasks,
       created_kind: filters.agents && isLead ? 'agent' : undefined,
       awaiting_decision: filters.decision || undefined,

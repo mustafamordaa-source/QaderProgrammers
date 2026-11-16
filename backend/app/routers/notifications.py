@@ -153,6 +153,7 @@ def _snapshot(task, user) -> dict:
         "side": task.side.value if task.side else None,
         "area": task.area.slug if task.area else None,
         "audience": task.audience,
+        "requested_by": task.requested_by,
         "restricted": task.restricted,
         "claim": claim,
         "assignees": [u.handle or u.name for u in (task.assignee_1, task.assignee_2) if u],

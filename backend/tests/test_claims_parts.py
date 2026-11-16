@@ -551,3 +551,34 @@ def test_split_halves_keep_the_parent_kind(client, auth, leader, db_session):
     kids = client.post(f"/tasks/{tid}/split", headers=h, json={"parts": [
         {"side": "be", "parts_from": [1]}, {"side": "fe", "parts_from": [2]}]}).json()["children"]
     assert {k["kind"] for k in kids} == {"bug"}
+
+
+class TestRequestedBy:
+    def test_requests_come_first_and_halves_copy_them(self, client, auth, leader, alice, db_session):
+        h = auth(leader)
+        bug, page, asked = _import(
+            client, h, _item("QX-R1", kind="bug", audience="students"),
+            _item("QX-R2", kind="feature", audience="students"),
+            _item("QX-R3", kind="feature", audience="team", requested_by="managers",
+                  requested_by_name="Mustafa", requested_at="2026-11-12", criteria=["API", "UI"]))
+        assert [r["id"] for r in client.get("/tasks?subtasks=top", headers=h).json()] == [asked, bug, page]
+        row = client.get(f"/tasks/{asked}", headers=h).json()
+        assert (row["requested_by"], row["requested_by_name"], row["requested_at"]) == ("managers", "Mustafa", "2026-11-12")
+        kids = client.post(f"/tasks/{asked}/split", headers=h, json={"parts": [
+            {"side": "be", "parts_from": [1]}, {"side": "fe", "parts_from": [2]}]}).json()["children"]
+        assert {client.get(f"/tasks/{k['id']}", headers=h).json()["requested_by"] for k in kids} == {"managers"}
+        f = client.get("/tasks/facets?requested_by=managers", headers=h).json()
+        assert f["total"] == 3 and f["requested_by"] == {"managers": 3}
+        assert [r["id"] for r in client.get("/tasks?requested_by=none", headers=h).json()] == [bug, page]
+        b = client.get(f"/tasks/{asked}/brief", headers=h).json()
+        assert b["requested_by"] == "managers" and b["requested_by_name"] == "Mustafa"
+
+    def test_only_leads_set_it_and_empty_clears(self, client, auth, leader, alice, db_session):
+        r = client.post("/tasks", headers=auth(alice), json={"title": "Mine", "requested_by": "managers"})
+        assert r.status_code == 403
+        t = client.post("/tasks", headers=auth(leader), json={"title": "Asked", "requested_by": "stakeholders",
+                                                              "requested_at": "2026-11-16"}).json()
+        r = client.patch(f"/tasks/{t['id']}", headers=auth(leader),
+                         json={"requested_by": "", "requested_at": ""})
+        assert r.status_code == 200 and r.json()["requested_by"] is None and r.json()["requested_at"] is None
+        assert client.patch(f"/tasks/{t['id']}", headers=auth(leader), json={"requested_by": "boss"}).status_code == 422

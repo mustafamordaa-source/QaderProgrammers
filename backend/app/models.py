@@ -4,13 +4,14 @@ agent-hub tables (comments, acceptance criteria, git links, API tokens)."""
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     DDL,
     JSON,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -366,6 +367,10 @@ class Task(Base):
     # Retired: the old "pool" box. Kept as a column so old rows load; nothing reads it.
     # `pool` below now answers whether the task is open to its side.
     pool_flag: Mapped[bool] = mapped_column("pool", Boolean, default=False, nullable=False)
+    # Who asked for it: managers, stakeholders, team or scan. Requests come first in Impact.
+    requested_by: Mapped[str | None] = mapped_column(String(12), nullable=True, index=True)
+    requested_by_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    requested_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     # Who the problem reaches: students, teachers, parents, managers, admins or team.
     audience: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
     # Sensitive work: only a lead's chosen assignee takes it, never the side at large.
@@ -789,6 +794,7 @@ class NotifyKind(str, enum.Enum):
 # What a person gets by email unless they change it. Leads also get
 # review and proposal, which only leads receive at all.
 # Who a task's problem reaches, in Impact order (unset sorts between admins and team).
+REQUESTERS: tuple[str, ...] = ("managers", "stakeholders", "team", "scan")
 AUDIENCES: tuple[str, ...] = ("students", "teachers", "parents", "managers", "admins", "team")
 
 DEFAULT_EMAIL_KINDS: tuple[str, ...] = (

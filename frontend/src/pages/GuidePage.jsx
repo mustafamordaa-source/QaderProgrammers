@@ -372,12 +372,17 @@ const SECTIONS = [
       { type: 'h3', text: 'The Free to take view' },
       {
         type: 'p',
-        text: 'Press Free to take at the top of the board to see only what you can take now: To do first, then Backlog. Each card says Planned or Backlog. The other views are My work, Needs decision and Blocked. Filters stay in the address bar, so you can send a filtered board as a link. Sort orders every column: Impact (the default), Created (oldest first), Last change, Priority (urgent first), Effort (easiest first), Due date or Title; the arrow button reverses it. In the CLI: qhub ready --sort priority, qhub ls --sort points --desc.',
+        text: 'Press Free to take at the top of the board to see only what you can take now: To do first, then Backlog. Each card says Planned or Backlog. The other views are Managers’ list, My work, Needs decision and Blocked. Filters stay in the address bar, so you can send a filtered board as a link. Sort orders every column: Impact (the default), Created (oldest first), Last change, Priority (urgent first), Effort (easiest first), Due date or Title; the arrow button reverses it. In the CLI: qhub ready --sort priority, qhub ls --sort points --desc.',
       },
       { type: 'h3', text: 'Audience and the Impact sort' },
       {
         type: 'p',
-        text: 'Each task can say who it reaches: Students, Teachers, Parents, Managers, Admins or Team (internal work such as tooling and pipelines). Set it under “Who does it reach?” when you create or edit a task; leave it empty when you’re not sure. Cards show it with a cap icon, and the Audience chip filters by it. The board sorts by Impact unless you pick another sort: student work first, then teachers, parents, managers, admins, tasks with no audience, and team work last, oldest first inside each group. The arrow button puts team work first.',
+        text: 'Each task can say who it reaches: Students, Teachers, Parents, Managers, Admins or Team (internal work such as tooling and pipelines). Set it under “Who does it reach?” when you create or edit a task; leave it empty when you’re not sure. Cards show it with a cap icon, and the Audience chip filters by it. The board sorts by Impact unless you pick another sort: requests from managers and stakeholders first, then bugs, then everything else; inside each group student work first, then teachers, parents, managers, admins, tasks with no audience, and team work last, oldest first.',
+      },
+      { type: 'h3', text: 'Requests from managers and stakeholders' },
+      {
+        type: 'p',
+        text: 'A gold star badge marks a task a manager or stakeholder asked for; a lead sets “Requested by” (with a name and date when known), and the Managers’ list view and the Requested by chip show these tasks. They come first in the default Impact order, ahead of bugs and everything else.',
       },
       { type: 'h3', text: 'From the CLI' },
       {
