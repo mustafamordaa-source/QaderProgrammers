@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { api } from '../../api/client'
 import {
+  AUDIENCE_FILTER_VALUES,
+  AUDIENCE_LABELS,
   KIND_LABELS,
   PRIORITIES,
   PRIORITY_LABELS,
@@ -14,6 +16,7 @@ import { loadAreas } from './AreaPicker'
 import {
   AgentIcon,
   AreaIcon,
+  AudienceIcon,
   BlockedIcon,
   ChevronDown,
   CloseIcon,
@@ -427,8 +430,10 @@ function Segmented({ label, value, options, onChange }) {
   )
 }
 
-// Sorts and the direction each starts in (oldest first is the board default).
+// Sorts and the direction each starts in. Impact is the board default: work
+// that reaches students first, oldest first inside each group.
 const SORTS = [
+  { value: 'impact', label: 'Impact (students first)', asc: 'Students first', desc: 'Team first', natural: 'asc' },
   { value: 'created', label: 'Created', asc: 'Oldest first', desc: 'Newest first', natural: 'asc' },
   { value: 'updated', label: 'Last change', asc: 'Least recent first', desc: 'Most recent first', natural: 'desc' },
   { value: 'priority', label: 'Priority', asc: 'Urgent first', desc: 'Low first', natural: 'asc' },
@@ -500,6 +505,11 @@ export default function BoardFilters({
   for (const k of filters.kind) {
     add(`kind-${k}`, KIND_LABELS[k] ?? k, { kind: filters.kind.filter((v) => v !== k) })
   }
+  for (const a of filters.audience) {
+    add(`audience-${a}`, `Reaches: ${AUDIENCE_LABELS[a] ?? a}`, {
+      audience: filters.audience.filter((v) => v !== a),
+    })
+  }
   if (filters.side) add('side', SIDE_LABELS[filters.side] ?? filters.side, { side: '' })
   if (filters.area) {
     add('area', `Area: ${areas.find((a) => a.slug === filters.area)?.name ?? filters.area}`, { area: '' })
@@ -556,7 +566,7 @@ export default function BoardFilters({
             <select
               value={filters.sort}
               onChange={(event) => update({ sort: event.target.value, order: '' })}
-              className={`${control} ${filters.sort !== 'created' || filters.order ? 'border-series1 text-series1' : 'border-hairline'}`}
+              className={`${control} ${filters.sort !== 'impact' || filters.order ? 'border-series1 text-series1' : 'border-hairline'}`}
             >
               {SORTS.map((s) => (
                 <option key={s.value} value={s.value}>{s.label}</option>
@@ -696,6 +706,17 @@ export default function BoardFilters({
             onChange={(kind) => update({ kind })}
             facetParams={facetParams}
             omit={['kinds']}
+          />
+          <MultiMenu
+            icon={AudienceIcon}
+            label="Audience"
+            values={filters.audience}
+            options={AUDIENCE_FILTER_VALUES}
+            labels={AUDIENCE_LABELS}
+            facetKey="audience"
+            onChange={(audience) => update({ audience })}
+            facetParams={facetParams}
+            omit={['audience']}
           />
           <MenuChip
             icon={SideIcon}

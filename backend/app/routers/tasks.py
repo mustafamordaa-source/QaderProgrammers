@@ -719,6 +719,7 @@ def create_task(
         areas=payload.areas or [],
         restricted=bool(payload.restricted),
         assign_only=bool(payload.assign_only),
+        audience=payload.audience or None,
         created_kind=auth.kind,
         created_agent=auth.agent,
         kind=payload.kind,
@@ -806,8 +807,9 @@ def list_tasks(
         description="With awaiting_decision: 'me' (default) or, for a lead, 'leads' for questions to any lead",
     ),
     sort: str = Query(
-        default="created", pattern=r"^(created|updated|priority|points|due|title)$",
-        description="created: oldest first; updated: newest change first; priority: urgent first; "
+        default="impact", pattern=r"^(impact|created|updated|priority|points|due|title)$",
+        description="impact (default): students first, then teachers, parents, managers, admins, unset, team, "
+                    "oldest first inside each; created: oldest first; updated: newest change first; priority: urgent first; "
                     "points: easiest first; due: soonest first; title: A to Z. `order` flips it.",
     ),
     order: str | None = Query(default=None, pattern=r"^(asc|desc)$",
@@ -820,6 +822,8 @@ def list_tasks(
     subtasks: str = Query(default="all", pattern=r"^(all|top|only)$",
                           description="top hides subtasks, only shows just subtasks"),
     claimable: bool = Query(default=False, description="Only tasks you can claim now"),
+    audience: str | None = Query(default=None, max_length=80,
+                                 description="Comma list of students, teachers, parents, managers, admins, team, none"),
 ) -> list[TaskOut]:
     """Tasks you can see, newest first. Send `page` and/or `page_size` to read a
     page at a time; the totals come back in the X-Total-* headers.
@@ -835,6 +839,7 @@ def list_tasks(
         mine=mine, ready=ready, q=q, include_closed=include_closed, created_kind=created_kind,
         created_by=created_by, from_bots=from_bots, kind=kind, parent_id=parent_id, pool=pool,
         my_sides=my_sides, area=area, lane=lane, priority=priority, kinds=kinds, subtasks=subtasks,
+        audience=audience,
     )
     asked_ids = _asked_ids(db, user, awaiting_decision, to)
     if awaiting_decision:
@@ -895,13 +900,17 @@ def list_tasks(
 
 
 # Each sort's natural direction: True means ascending.
-NATURAL_ASC = {"created": True, "updated": False, "priority": True, "points": True, "due": True, "title": True}
+NATURAL_ASC = {"impact": True, "created": True, "updated": False, "priority": True, "points": True, "due": True, "title": True}
 
 
 def _ordering(sort: str, order: str | None):
     """ORDER BY for the task list. Ties fall back to oldest first, then id, so
     two pages never share a row."""
     asc = NATURAL_ASC[sort] if order is None else order == "asc"
+    if sort == "impact":
+        rank = case({"students": 0, "teachers": 1, "parents": 2, "managers": 3, "admins": 4, "team": 6},
+                    value=Task.audience, else_=5)
+        return [rank.asc() if asc else rank.desc(), Task.created_at.asc(), Task.id.asc()]
     if sort == "priority":
         rank = case({"urgent": 0, "high": 1, "medium": 2, "low": 3}, value=Task.priority, else_=9)
         keys = [rank.asc() if asc else rank.desc()]
@@ -946,7 +955,7 @@ def _filtered(
     db: Session, user: User, now, *, status_filter=None, statuses=None, assignee_id=None, side=None,
     mine=False, ready=False, q=None, include_closed=True, created_kind=None, created_by=None,
     from_bots=False, kind=None, parent_id=None, pool=None, my_sides=False, area=None, lane=None,
-    priority=None, kinds=None, subtasks="all",
+    priority=None, kinds=None, subtasks="all", audience=None,
 ):
     """The SQL part of the task filters, shared by the list and the facets."""
     stmt = select(Task)
@@ -976,6 +985,17 @@ def _filtered(
     wanted_kinds = _comma(kinds, TaskKind, "kinds")
     if wanted_kinds:
         stmt = stmt.where(Task.kind.in_(wanted_kinds))
+    if audience:
+        from app.models import AUDIENCES
+
+        wanted = [a.strip().lower() for a in audience.split(",") if a.strip()]
+        bad = [a for a in wanted if a not in AUDIENCES and a != "none"]
+        if bad:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"audience: no value '{bad[0]}'")
+        named = [a for a in wanted if a != "none"]
+        conds = ([Task.audience.in_(named)] if named else []) + ([Task.audience.is_(None)] if "none" in wanted else [])
+        stmt = stmt.where(or_(*conds))
     if subtasks == "top":
         stmt = stmt.where(Task.parent_id.is_(None))
     elif subtasks == "only":
@@ -1055,6 +1075,7 @@ def facets(
     kinds: str | None = Query(default=None, max_length=120),
     subtasks: str = Query(default="all", pattern=r"^(all|top|only)$"),
     claimable: bool = False,
+    audience: str | None = Query(default=None, max_length=80),
 ) -> FacetsOut:
     """Counts for the same filters as GET /tasks: by status, priority, kind,
     side, area and lane, plus how many you can claim. For filter chips and
@@ -1067,7 +1088,7 @@ def facets(
         db, user, now, status_filter=status_filter, statuses=statuses, assignee_id=assignee_id, side=side,
         mine=mine, ready=ready, q=q, include_closed=include_closed, kind=kind, parent_id=parent_id,
         pool=pool, my_sides=my_sides, area=area, lane=lane, priority=priority, kinds=kinds, subtasks=subtasks,
-        created_kind=created_kind, created_by=created_by, from_bots=from_bots,
+        created_kind=created_kind, created_by=created_by, from_bots=from_bots, audience=audience,
     )
     stmt = stmt.options(selectinload(Task.criteria), selectinload(Task.children), selectinload(Task.incoming_links))
     if awaiting_decision:
@@ -1075,7 +1096,8 @@ def facets(
         stmt = stmt.where(Task.id.in_(select(Comment.task_id).where(
             Comment.kind == CommentKind.question, Comment.resolved_at.is_(None), Comment.to_user_id.in_(asked),
         )))
-    out = FacetsOut(total=0, status={}, priority={}, kind={}, side={}, area={}, lane={}, claimable=0, subtasks=0)
+    out = FacetsOut(total=0, status={}, priority={}, kind={}, side={}, area={}, lane={}, claimable=0, subtasks=0,
+                    audience={})
 
     def bump(bucket: dict, key) -> None:
         if key is not None:
@@ -1099,6 +1121,7 @@ def facets(
         bump(out.side, t.side.value if t.side else "none")
         bump(out.area, t.area.slug if t.area else "none")
         bump(out.lane, LANES.get(t.status))
+        bump(out.audience, t.audience or "none")
     return out
 
 
@@ -1271,7 +1294,7 @@ def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> 
         task = Task(
             title=title, description=description, priority=item.priority, status=item.status,
             created_by=auth.user.id, side=item.side, tags=item.tags or [], areas=[],
-            restricted=item.restricted, assign_only=item.assign_only, created_kind=auth.kind, created_agent=auth.agent,
+            restricted=item.restricted, assign_only=item.assign_only, audience=item.audience or None, created_kind=auth.kind, created_agent=auth.agent,
             kind=item.kind, fingerprint=fingerprint, area_id=area.id if area else None,
         )
         if item.points is not None:
@@ -1291,9 +1314,10 @@ def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> 
     wanted: dict[str, object] = {"title": title}
     if "description" in sent:
         wanted["description"] = description
-    for field in ("kind", "priority", "side", "restricted", "points", "assign_only"):
+    for field in ("kind", "priority", "side", "restricted", "points", "assign_only", "audience"):
         if field in sent and getattr(item, field) is not None:
-            wanted[field] = getattr(item, field)
+            # An empty audience clears it.
+            wanted[field] = getattr(item, field) or None if field == "audience" else getattr(item, field)
     if "tags" in sent:
         wanted["tags"] = item.tags or []
     if "area" in sent:
@@ -1666,6 +1690,7 @@ def brief(task_id: int, auth: AuthCtx, db: DbSession) -> TaskBrief:
         blocked_by=[f"#{b}" for b in task.open_blockers()],
         links=[link.label for link in _links_out(task)][:10],
         truncated=truncated,
+        audience=task.audience,
         claimable=claimable,
         claim_block=code,
         claim_block_text=text,
@@ -1698,7 +1723,7 @@ def task_events(
 
 # --- edit / assign / status ---------------------------------------------------
 
-_WORKER_FIELDS = {"summary", "tags", "areas", "side", "area"}
+_WORKER_FIELDS = {"summary", "tags", "areas", "side", "area", "audience"}
 _LINTED = {"title", "description", "summary"}
 
 
@@ -1744,6 +1769,8 @@ def update_task(
             value = lint.clean(value, field=field)
         if field in {"restricted", "assign_only"} and value is None:
             continue
+        if field == "audience" and value == "":
+            value = None
         if field in {"tags", "areas"} and value is None:
             value = []
         old = getattr(task, field)

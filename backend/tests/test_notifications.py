@@ -21,8 +21,8 @@ def smtp_on(monkeypatch):
     monkeypatch.setattr(settings, "smtp_from", "hub@example.com")
     monkeypatch.setattr(settings, "email_batch_seconds", 120)
     sent: list[dict] = []
-    monkeypatch.setattr(mailer, "send_message", lambda to, subject, body: sent.append(
-        {"to": to, "subject": subject, "body": body}))
+    monkeypatch.setattr(mailer, "send_message", lambda to, subject, body, html=None: sent.append(
+        {"to": to, "subject": subject, "body": body, "html": html}))
     return sent
 
 
@@ -84,7 +84,11 @@ class TestWhoIsTold:
         client.post(f"/tasks/{task.id}/comments", headers=auth(alice), json={"body": "@bob @lead look"})
         assert _rows(db_session, bob) == []
         lead_row = _rows(db_session, leader)[0]
-        assert lead_row.text is None  # restricted: no excerpt leaves the hub
+        # The hub keeps the text (only people who can see the task are told); email leaves it out.
+        assert lead_row.text == "@bob @lead look"
+        subject, body = mailer.compose(leader, [lead_row])
+        assert "look" not in body and "Restricted task" in body
+        assert "look" not in mailer.compose_html(leader, [lead_row])
 
     def test_bots_hear_a_tag_but_never_by_email(self, client, auth, leader, db_session, make_task):
         bot = client.post("/users", headers=auth(leader), json={
@@ -251,3 +255,54 @@ def test_agents_read_their_owners_notifications_with_the_comment(client, auth, l
                 json={"kind": "answer", "body": "CSV", "parent_id": q["id"]})
     assert client.get("/notifications", headers=agent).json()[0]["question_open"] is False
     assert client.post("/notifications/read", headers=agent, json={"all": True}).json() == {"marked": 1}
+
+
+class TestDetail:
+    def test_expand_gives_task_thread_and_actions(self, client, auth, leader, alice, make_task, handles, db_session):
+        task = make_task(assignee_1=alice)
+        q = client.post(f"/tasks/{task.id}/comments", headers=auth(leader),
+                        json={"body": "Which **option**?", "kind": "question", "to": "alice"}).json()
+        rows = client.get("/notifications?expand=task,thread", headers=auth(alice)).json()
+        row = next(r for r in rows if r["kind"] == "question")
+        assert row["task"]["key"] == f"HUB-{task.id}" and row["task"]["status"] == task.status.value
+        assert row["thread"]["comment"]["body"] == "Which **option**?"
+        assert row["thread"]["replies_to"] is None
+        assert any(a["label"] == "Answer" and str(q["id"]) in a["command"] for a in row["actions"])
+        plain = client.get("/notifications", headers=auth(alice)).json()
+        assert plain[0]["task"] is None and plain[0]["actions"] == []
+
+    def test_email_has_status_full_text_and_reply_context(self, client, auth, leader, alice, make_task, handles, db_session):
+        task = make_task(assignee_1=alice)
+        long = "line one" + chr(10) + "x" * 900
+        client.post(f"/tasks/{task.id}/comments", headers=auth(leader), json={"body": "@alice " + long})
+        row = _rows(db_session, alice)[-1]
+        assert len(row.text) > 300
+        subject, body = mailer.compose(alice, [row])
+        assert f"HUB-{task.id}" in subject and "x" * 900 in body and "> line one" not in subject
+        html = mailer.compose_html(alice, [row])
+        assert f"/t/{task.id}" in html and "Open the task" in html and "<script" not in html
+
+
+class TestDetailPrivacy:
+    def test_lost_access_hides_text_and_detail(self, client, auth, leader, alice, bob, make_task, handles, db_session):
+        task = make_task(assignee_1=bob)
+        task.restricted = True
+        db_session.commit()
+        client.post(f"/tasks/{task.id}/comments", headers=auth(leader), json={"body": "@bob secret plan"})
+        row = client.get("/notifications?expand=task,thread", headers=auth(bob)).json()[0]
+        assert row["text"] == "@bob secret plan" and row["task"]["key"] == f"HUB-{task.id}"
+        client.patch(f"/tasks/{task.id}/assign", headers=auth(leader), json={"assignee_1_id": alice.id})
+        row = client.get("/notifications?expand=task,thread", headers=auth(bob)).json()[0]
+        assert row["text"] is None and row["task"] is None and row["thread"] is None
+        assert "secret" not in str(row) and row["task_title"] == f"HUB-{task.id}"
+
+    def test_restricted_email_names_only_the_key(self, client, auth, leader, alice, make_task, handles, db_session):
+        task = make_task(assignee_1=alice, title="Secret hole in payments")
+        task.restricted = True
+        db_session.commit()
+        client.post(f"/tasks/{task.id}/comments", headers=auth(leader), json={"body": "@alice look"})
+        row = _rows(db_session, alice)[-1]
+        subject, body = mailer.compose(alice, [row])
+        html = mailer.compose_html(alice, [row])
+        for text in (subject, body, html):
+            assert "Secret hole" not in text and f"HUB-{task.id}" in text

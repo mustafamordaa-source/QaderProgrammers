@@ -111,11 +111,13 @@ export default function BoardPage() {
       area: filters.area,
       kinds: filters.kind,
       priority: filters.priority,
+      audience: filters.audience,
       subtasks: filters.subtasks === 'all' ? undefined : filters.subtasks,
       created_kind: filters.agents && isLead ? 'agent' : undefined,
       awaiting_decision: filters.decision || undefined,
       to: filters.decision && isLead ? 'leads' : undefined,
-      sort: filters.sort !== 'created' ? filters.sort : undefined,
+      // Impact (students first) is the server's default, so it goes unsent.
+      sort: filters.sort !== 'impact' ? filters.sort : undefined,
       order: filters.order || undefined,
     }),
     [filters, isLead],
@@ -136,7 +138,7 @@ export default function BoardPage() {
           ...apiFilters,
           statuses: statuses.join(','),
           // Done shows the latest changes first unless someone picked a sort.
-          ...(column.key === 'done' && filters.sort === 'created' && !filters.order
+          ...(column.key === 'done' && filters.sort === 'impact' && !filters.order
             ? { sort: 'updated' }
             : {}),
         },

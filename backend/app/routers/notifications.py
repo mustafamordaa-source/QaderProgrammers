@@ -35,6 +35,10 @@ class NotificationOut(BaseModel):
     created_at: object
     read_at: object | None
     email_state: str
+    # With ?expand=task,thread: everything needed to act without another call.
+    task: dict | None = None
+    thread: dict | None = None
+    actions: list[dict] = []
 
 
 class ReadRequest(BaseModel):
@@ -92,8 +96,22 @@ def list_notifications(
     paging: Page,
     unread: bool = False,
     limit: int = Query(default=50, ge=1, le=200, description="Used only when neither page nor page_size is sent"),
+    expand: str | None = Query(default=None, max_length=40,
+                               description="task, thread (comma list): add the task snapshot, the comment "
+                                           "thread and suggested commands to each row"),
 ) -> list[NotificationOut]:
+    wanted = {x.strip() for x in (expand or "").split(",") if x.strip()}
     stmt = select(Notification).where(Notification.user_id == user.id)
+    if wanted:
+        from sqlalchemy.orm import selectinload
+
+        from app.models import Task
+
+        stmt = stmt.options(
+            selectinload(Notification.task).selectinload(Task.comments),
+            selectinload(Notification.task).selectinload(Task.criteria),
+            selectinload(Notification.task).selectinload(Task.incoming_links),
+        )
     if unread:
         stmt = stmt.where(Notification.read_at.is_(None))
     if paging.on:
@@ -101,8 +119,95 @@ def list_notifications(
         stmt = paging.window(stmt.order_by(Notification.id.desc()))
     else:
         stmt = stmt.order_by(Notification.id.desc()).limit(limit)
+    from app.routers.tasks import _can_see
+
     rows = db.scalars(stmt).unique()
-    return [_out(n) for n in rows]
+    out = []
+    for n in rows:
+        row = _out(n)
+        if not _can_see(n.task, user):
+            # Lost access since (unassigned, or the task became restricted): keep the row, not its content.
+            row.text = None
+            row.task_title = f"HUB-{n.task_id}"
+        elif wanted:
+            _expand(row, n, user, wanted)
+        out.append(row)
+    return out
+
+
+def _snapshot(task, user) -> dict:
+    from app.routers.tasks import _part_holder
+
+    now = utcnow()
+    claim = None
+    if task.claim_is_live(now) and task.claimer:
+        claim = f"{task.claimer.handle or task.claimer.name} until {task.claim_expires_at:%Y-%m-%d %H:%M}Z"
+    taken = sum(1 for c in task.criteria if _part_holder(c) is not None)
+    return {
+        "id": task.id,
+        "key": f"HUB-{task.id}",
+        "title": task.title,
+        "status": task.status.value,
+        "priority": task.priority.value,
+        "kind": task.kind.value,
+        "side": task.side.value if task.side else None,
+        "area": task.area.slug if task.area else None,
+        "audience": task.audience,
+        "restricted": task.restricted,
+        "claim": claim,
+        "assignees": [u.handle or u.name for u in (task.assignee_1, task.assignee_2) if u],
+        "parts": f"{taken}/{len(task.criteria)} taken",
+        "open_questions": sum(1 for c in task.comments if c.kind.value == "question" and c.resolved_at is None),
+        "blocked_by": task.open_blockers(),
+    }
+
+
+def _cut(text: str | None, n: int) -> str | None:
+    if text is None:
+        return None
+    return text if len(text) <= n else text[: n - 3] + "..."
+
+
+def _expand(row: NotificationOut, n: Notification, user: User, wanted: set[str]) -> None:
+    task = n.task
+    key = f"HUB-{task.id}"
+    if "task" in wanted:
+        row.task = _snapshot(task, user)
+    comment = next((c for c in task.comments if c.id == n.comment_id), None) if n.comment_id else None
+    if "thread" in wanted and comment is not None:
+        parent = next((c for c in task.comments if c.id == comment.parent_id), None) if comment.parent_id else None
+        row.thread = {
+            "comment": {
+                "id": comment.id,
+                "kind": comment.kind.value,
+                "author": comment.author.handle or comment.author.name,
+                "author_kind": comment.actor_kind.value,
+                "agent_name": comment.agent_name,
+                "body": _cut(comment.body, 4000),
+                "created_at": comment.created_at,
+                "resolved": comment.resolved_at is not None,
+            },
+            "replies_to": {
+                "id": parent.id,
+                "author": parent.author.handle or parent.author.name,
+                "body": _cut(parent.body, 1000),
+            } if parent else None,
+        }
+    actions = []
+    if n.kind is NotifyKind.question and comment is not None and comment.resolved_at is None:
+        actions.append({"label": "Answer", "command": f"qhub answer {task.id} {comment.id} --body-file reply.md"})
+    elif comment is not None:
+        actions.append({"label": "Reply", "command": f"qhub comment {task.id} --reply-to {comment.id} --body-file reply.md"})
+    if n.kind in (NotifyKind.assigned, NotifyKind.claim_freed) and task.status.value in ("backlog", "to_do"):
+        actions.append({"label": "Claim", "command": f"qhub claim {key}"})
+    if n.kind is NotifyKind.claim_idle:
+        actions.append({"label": "Post progress", "command": f'qhub comment {task.id} "progress: ..."'})
+        actions.append({"label": "Release", "command": f"qhub release {key}"})
+    if n.kind is NotifyKind.review:
+        actions.append({"label": "Review", "command": f"qhub show {key} --full"})
+    actions.append({"label": "Open", "command": f"qhub show {key}"})
+    actions.append({"label": "Mark read", "command": f"qhub notifications read {n.id}"})
+    row.actions = actions
 
 
 @router.get("/count")

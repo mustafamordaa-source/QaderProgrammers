@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import WithPreview, { RichText } from '../../MarkdownPreview'
 import { api } from '../../../api/client'
-import { ActorBadge, DeployBadge, PlainText, TagBadge } from '../../Badges'
+import { ActorBadge, AudienceBadge, DeployBadge, PlainText, TagBadge } from '../../Badges'
 import AreaPicker from '../AreaPicker'
 import PointsPicker from '../PointsPicker'
 import TaskPicker from '../TaskPicker'
 import { LockIcon } from '../BoardIcons'
 import {
+  AUDIENCES,
+  AUDIENCE_LABELS,
   DEPLOY_LABELS,
   DEPLOY_STATES,
   KIND_LABELS,
@@ -53,7 +55,7 @@ function personName(person) {
   return person.handle ? `${person.name} (@${person.handle})` : person.name
 }
 
-/** Edit form. Leaders edit everything; workers edit summary, tags, areas and side. */
+/** Edit form. Leaders edit everything; workers edit summary, tags, areas, side and audience. */
 function EditForm({ ctx, programmers, onDone }) {
   const { task, isLead, busy, run } = ctx
   const [form, setForm] = useState({
@@ -61,6 +63,7 @@ function EditForm({ ctx, programmers, onDone }) {
     description: task.description ?? '',
     summary: task.summary ?? '',
     side: task.side ?? '',
+    audience: task.audience ?? '',
     tags: (task.tags ?? []).join(', '),
     areas: (task.areas ?? []).join('\n'),
     area: task.area?.slug ?? '',
@@ -95,6 +98,8 @@ function EditForm({ ctx, programmers, onDone }) {
     }
     put('summary', form.summary.trim() || null, task.summary)
     put('side', form.side || null, task.side)
+    // "" clears the audience.
+    put('audience', form.audience, task.audience ?? '')
     put('tags', splitList(form.tags), task.tags ?? [])
     put('areas', splitList(form.areas), task.areas ?? [])
     if ((form.area || '') !== (task.area?.slug ?? '')) out.area = form.area || ''
@@ -199,6 +204,20 @@ function EditForm({ ctx, programmers, onDone }) {
             <option value="">None</option>
             {SIDES.map((s) => (
               <option key={s} value={s}>{SIDE_LABELS[s]}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium" htmlFor="edit-audience">Who does it reach?</label>
+          <select
+            id="edit-audience"
+            value={form.audience}
+            onChange={(e) => update('audience', e.target.value)}
+            className={inputClass}
+          >
+            <option value="">Not sure</option>
+            {AUDIENCES.map((a) => (
+              <option key={a} value={a}>{AUDIENCE_LABELS[a]}</option>
             ))}
           </select>
         </div>
@@ -677,7 +696,7 @@ export default function OverviewTab({ ctx }) {
 
         {(isLead || isWorker) && !isReadOnly && !closed && (
           <button type="button" onClick={() => setEditing(true)} className={secondaryButton}>
-            {isLead ? 'Edit task' : 'Edit summary, side, tags and areas'}
+            {isLead ? 'Edit task' : 'Edit summary, side, audience, tags and areas'}
           </button>
         )}
       </div>
@@ -695,6 +714,9 @@ export default function OverviewTab({ ctx }) {
               </Field>
             </div>
           )}
+          <Field label="Reaches">
+            {task.audience ? <AudienceBadge audience={task.audience} /> : <span className="text-ink-muted">Not set</span>}
+          </Field>
           <Field label="Due">{formatDate(task.due_date)}</Field>
           <Field label="Created">
             <span className="block">

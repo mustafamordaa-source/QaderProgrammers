@@ -464,6 +464,43 @@ export const POINT_LABELS = {
   13: 'Huge',
 }
 
+// Who a task reaches. Mirrors the task `audience` field; null means unknown.
+// The Impact sort orders by this list, with unset just before `team`.
+export const AUDIENCES = ['students', 'teachers', 'parents', 'managers', 'admins', 'team']
+
+// Board filter values: every audience plus `none` (not set).
+export const AUDIENCE_FILTER_VALUES = [...AUDIENCES, 'none']
+
+export const AUDIENCE_LABELS = {
+  students: 'Students',
+  teachers: 'Teachers',
+  parents: 'Parents',
+  managers: 'Managers',
+  admins: 'Admins',
+  team: 'Team (internal)',
+  none: 'Not set',
+}
+
+// Short words for cards.
+export const AUDIENCE_SHORT_LABELS = {
+  students: 'Students',
+  teachers: 'Teachers',
+  parents: 'Parents',
+  managers: 'Managers',
+  admins: 'Admins',
+  team: 'Team',
+}
+
+// Badge classes per audience. Students stand out: they are who the product is for.
+export const AUDIENCE_STYLES = {
+  students: 'border-series1/50 bg-series1/10 font-semibold text-series1',
+  teachers: 'border-series3/40 text-series3',
+  parents: 'border-series2/40 text-series2',
+  managers: 'border-hairline text-ink-secondary',
+  admins: 'border-hairline text-ink-secondary',
+  team: 'border-hairline text-ink-muted',
+}
+
 export const PRIORITIES = ['low', 'medium', 'high', 'urgent']
 
 export const PRIORITY_LABELS = {

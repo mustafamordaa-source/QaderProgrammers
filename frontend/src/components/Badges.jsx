@@ -1,5 +1,9 @@
+import { AudienceIcon } from './board/BoardIcons'
 import {
   ACTOR_KIND_LABELS,
+  AUDIENCE_LABELS,
+  AUDIENCE_SHORT_LABELS,
+  AUDIENCE_STYLES,
   COMMENT_KIND_LABELS,
   COMMENT_KIND_STYLES,
   DEPLOY_LABELS,
@@ -39,6 +43,21 @@ export function StatusBadge({ status }) {
   return (
     <span className={`${pill} bg-surface-raised ${STATUS_STYLES[status] ?? 'border-hairline text-ink-secondary'}`}>
       {STATUS_LABELS[status] ?? status}
+    </span>
+  )
+}
+
+/** Who the task reaches. Nothing when it is not set. `short` drops "(internal)". */
+export function AudienceBadge({ audience, short = false }) {
+  if (!audience) return null
+  const label = (short ? AUDIENCE_SHORT_LABELS : AUDIENCE_LABELS)[audience] ?? audience
+  return (
+    <span
+      className={`${pill} ${AUDIENCE_STYLES[audience] ?? 'border-hairline text-ink-secondary'}`}
+      title={`Reaches: ${AUDIENCE_LABELS[audience] ?? audience}`}
+    >
+      <AudienceIcon className="h-3 w-3" />
+      {label}
     </span>
   )
 }

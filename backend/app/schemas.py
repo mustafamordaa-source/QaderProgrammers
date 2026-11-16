@@ -263,6 +263,19 @@ class GitLinkOut(ORMModel):
     updated_at: datetime
 
 
+def _check_audience(v):
+    from app.models import AUDIENCES
+
+    if v is None:
+        return v
+    v = v.strip().lower()
+    if v == "":
+        return ""
+    if v not in AUDIENCES:
+        raise ValueError(f"audience: one of {', '.join(AUDIENCES)}")
+    return v
+
+
 class TaskRef(ORMModel):
     id: int
     title: str
@@ -273,6 +286,7 @@ class TaskRef(ORMModel):
     assignees: list[str] = []
     claim_holder: str | None = None
     pool: bool = False
+    audience: str | None = None
     blocked_by: list[int] = []
 
 
@@ -468,6 +482,7 @@ class TaskOut(ORMModel):
     # True when anyone on its side may claim it (no assignee, not restricted, not assign-only).
     pool: bool = False
     assign_only: bool = False
+    audience: str | None = None
     resume_status: TaskStatus | None = None
     created_kind: ActorKind = ActorKind.human
     created_agent: str | None = None
@@ -532,6 +547,7 @@ class FacetsOut(BaseModel):
     lane: dict[str, int]
     claimable: int
     subtasks: int
+    audience: dict[str, int] = {}
 
 
 class TaskDetailOut(TaskOut):
@@ -578,6 +594,13 @@ class _TaskHubFields(BaseModel):
     restricted: bool | None = None
     # Only a lead's chosen assignee takes it (leads only).
     assign_only: bool | None = None
+    # Who the problem reaches; "" clears it.
+    audience: str | None = None
+
+    @field_validator("audience")
+    @classmethod
+    def _audience(cls, v):
+        return _check_audience(v)
     # Product area slug (GET /areas lists them); "" clears it.
     area: str | None = None
 
@@ -665,6 +688,12 @@ class ImportTask(BaseModel):
     restricted: bool = False
     # Sensitive work a lead assigns by hand.
     assign_only: bool = False
+    audience: str | None = None
+
+    @field_validator("audience")
+    @classmethod
+    def _audience(cls, v):
+        return _check_audience(v)
     # Used on create only; a later import never moves the task.
     status: TaskStatus = TaskStatus.backlog
     # A question for a lead. It parks the task in needs_confirm until answered.
@@ -847,6 +876,7 @@ class TaskBrief(BaseModel):
     blocked_by: list[str] = []
     links: list[str] = []
     truncated: bool
+    audience: str | None = None
     # For the caller: can they claim it, and if not, why (code + sentence).
     claimable: bool = False
     claim_block: str | None = None

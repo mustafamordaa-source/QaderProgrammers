@@ -8,6 +8,8 @@ import PointsPicker from './PointsPicker'
 import TaskPicker from './TaskPicker'
 import { loadTemplates } from './taskTemplates'
 import {
+  AUDIENCES,
+  AUDIENCE_LABELS,
   CREATE_STATUSES,
   DEFAULT_POINTS,
   KIND_LABELS,
@@ -52,6 +54,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
     assignee_1_id: '',
     assignee_2_id: '',
     side: preset?.side ?? '',
+    audience: preset?.audience ?? '',
     tags: (preset?.tags ?? []).join(', '),
     areas: '',
     area: preset?.area ?? '',
@@ -154,6 +157,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
       points: form.points,
       due_date: fromDateInputValue(form.due_date, true),
       side: form.side || null,
+      audience: form.audience || null,
       tags: splitList(form.tags),
       areas: splitList(form.areas),
       criteria: form.criteria
@@ -348,7 +352,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
           </p>
         </div>
 
-        <div className="mt-4 grid gap-4 sm:grid-cols-3">
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
             <label className="block text-sm font-medium" htmlFor="side">
               Side
@@ -363,6 +367,24 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
               {SIDES.map((side) => (
                 <option key={side} value={side}>
                   {SIDE_LABELS[side]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium" htmlFor="audience">
+              Who does it reach? <span className="font-normal text-ink-muted">(optional)</span>
+            </label>
+            <select
+              id="audience"
+              value={form.audience}
+              onChange={(event) => update('audience', event.target.value)}
+              className={inputClass}
+            >
+              <option value="">Not sure</option>
+              {AUDIENCES.map((audience) => (
+                <option key={audience} value={audience}>
+                  {AUDIENCE_LABELS[audience]}
                 </option>
               ))}
             </select>

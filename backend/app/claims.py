@@ -64,7 +64,7 @@ def _note(db: Session, user: User | None, task: Task, kind: NotifyKind, text: st
         return
     db.add(Notification(
         user_id=user.id, task_id=task.id, kind=kind, actor_id=None, actor_kind=ActorKind.human,
-        text=None if task.restricted else text, created_at=now,
+        text=text, created_at=now,
         email_state="pending" if wants_email(user, kind) else "skipped",
     ))
 
