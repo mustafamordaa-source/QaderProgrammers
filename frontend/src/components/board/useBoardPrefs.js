@@ -14,13 +14,19 @@ function readPrefs() {
       collapsed: Array.isArray(saved.collapsed) ? saved.collapsed.filter((k) => typeof k === 'string') : [],
       density: DENSITIES.includes(saved.density) ? saved.density : 'comfortable',
       groupBy: GROUPS.includes(saved.groupBy) ? saved.groupBy : 'none',
+      // True once the person has opened or closed the filter panel.
+      filtersSeen: saved.filtersSeen === true,
     }
   } catch {
-    return { collapsed: [], density: 'comfortable', groupBy: 'none' }
+    return { collapsed: [], density: 'comfortable', groupBy: 'none', filtersSeen: false }
   }
 }
 
-/** Collapsed columns, card density and grouping, kept per browser. */
+/**
+ * Collapsed columns, card density, grouping and whether the person has used
+ * the filter panel, kept per browser. The panel starts open until they open or
+ * close it once, so new people find the filters; after that it starts closed.
+ */
 export function useBoardPrefs() {
   const [prefs, setPrefs] = useState(readPrefs)
 
@@ -43,14 +49,20 @@ export function useBoardPrefs() {
 
   const setDensity = useCallback((density) => setPrefs((current) => ({ ...current, density })), [])
   const setGroupBy = useCallback((groupBy) => setPrefs((current) => ({ ...current, groupBy })), [])
+  const markFiltersSeen = useCallback(
+    () => setPrefs((current) => (current.filtersSeen ? current : { ...current, filtersSeen: true })),
+    [],
+  )
 
   return {
     collapsed: prefs.collapsed,
     density: prefs.density,
     groupBy: prefs.groupBy,
+    filtersSeen: prefs.filtersSeen,
     toggleCollapsed,
     setDensity,
     setGroupBy,
+    markFiltersSeen,
   }
 }
 

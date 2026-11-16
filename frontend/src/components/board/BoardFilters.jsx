@@ -1,5 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
-import { api } from '../../api/client'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   AUDIENCE_FILTER_VALUES,
   AUDIENCE_LABELS,
@@ -13,12 +12,11 @@ import {
   TASK_KINDS,
 } from '../../lib/constants'
 import { loadAreas } from './AreaPicker'
+import AreaTreeMenu, { areaPath, buildAreaTree } from './AreaTreeMenu'
 import {
   AgentIcon,
-  AreaIcon,
   AudienceIcon,
   BlockedIcon,
-  ChevronDown,
   CloseIcon,
   HandIcon,
   HashIcon,
@@ -31,20 +29,19 @@ import {
   StatusIcon,
   SubtasksIcon,
 } from './BoardIcons'
+import {
+  InlineMenus,
+  MenuChip,
+  Option,
+  chipBase,
+  chipTone,
+  control,
+  flipsToEnd,
+  useDismiss,
+  useFacets,
+  without,
+} from './filterParts'
 import { filtersMatch } from './useBoardPrefs'
-
-const control =
-  'h-8 rounded-lg border bg-surface-raised px-2.5 text-sm outline-none transition focus:border-series1'
-
-const chipBase =
-  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-sm transition'
-
-function chipTone(active, tone = 'series1') {
-  if (!active) return 'border-hairline text-ink-secondary hover:border-series1/40 hover:text-ink'
-  return tone === 'series2'
-    ? 'border-series2 bg-series2/10 text-series2'
-    : 'border-series1 bg-series1/10 text-series1'
-}
 
 // Ready-made views. Each one replaces every filter, so it always shows the same board.
 export const VIEWS = [
@@ -77,142 +74,19 @@ export const VIEWS = [
 const LANE_LABELS = { planned: 'Planned (To do)', backlog: 'Backlog' }
 const SUBTASK_LABELS = { all: 'All tasks', top: 'Hide subtasks', only: 'Only subtasks' }
 
-function Count({ value }) {
-  if (value === undefined || value === null) return null
-  return <span className="tabular ms-auto ps-3 text-xs text-ink-muted">{value}</span>
-}
-
-/** Facet counts while `enabled`, for `params` (already minus the menu's own filter). */
-function useFacets(params, enabled) {
-  const [state, setState] = useState({ data: null, failed: false })
-  const paramsKey = JSON.stringify(params)
-  useEffect(() => {
-    if (!enabled) return undefined
-    let cancelled = false
-    api
-      .facets(JSON.parse(paramsKey))
-      .then((data) => {
-        if (!cancelled) setState({ data, failed: false })
-      })
-      .catch(() => {
-        // Counts are a help, not the filter: the menu still works without them.
-        if (!cancelled) setState((current) => ({ data: current.data, failed: true }))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [paramsKey, enabled])
-  return state
-}
-
-function without(params, keys) {
-  const next = { ...params }
-  for (const key of keys) delete next[key]
-  return next
-}
-
-/**
- * A chip that opens a small menu. `children(facets, close)` renders the options;
- * the counts come from /tasks/facets for the current filters minus `omit`, so a
- * menu shows what each of its own options would give.
- */
-function MenuChip({ icon: Glyph, label, summary, active, facetParams, omit = [], children, width = 'w-60' }) {
-  const [open, setOpen] = useState(false)
-  const [alignEnd, setAlignEnd] = useState(false)
-  const wrapRef = useRef(null)
-  const buttonRef = useRef(null)
-  const menuId = useId()
-  const { data: facets, failed } = useFacets(without(facetParams, omit), open)
-
-  useEffect(() => {
-    if (!open) return undefined
-    function onPointer(event) {
-      if (!wrapRef.current?.contains(event.target)) setOpen(false)
-    }
-    function onKey(event) {
-      if (event.key === 'Escape') {
-        setOpen(false)
-        buttonRef.current?.focus()
-      }
-    }
-    document.addEventListener('mousedown', onPointer)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onPointer)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
-
-  function toggle() {
-    if (!open) {
-      // Near the right edge (phones), open the menu leftwards so it stays on screen.
-      const rect = buttonRef.current?.getBoundingClientRect()
-      setAlignEnd(Boolean(rect && rect.left + 256 > window.innerWidth - 8))
-    }
-    setOpen((value) => !value)
-  }
-
-  const close = () => setOpen(false)
-
-  return (
-    <div ref={wrapRef} className="relative">
-      <button
-        ref={buttonRef}
-        type="button"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        onClick={toggle}
-        className={`${chipBase} ${chipTone(active)}`}
-      >
-        <Glyph />
-        <span>{label}</span>
-        {summary && <span className="max-w-[8rem] truncate font-medium">: {summary}</span>}
-        <ChevronDown className="h-3 w-3 opacity-70" />
-      </button>
-      {open && (
-        <div
-          id={menuId}
-          role="group"
-          aria-label={label}
-          className={`absolute top-full z-30 mt-1 ${width} max-w-[calc(100vw-2rem)] rounded-lg border border-hairline bg-surface p-1 shadow-lg ${
-            alignEnd ? 'right-0' : 'left-0'
-          }`}
-        >
-          {children(facets, close)}
-          {failed && !facets && (
-            <p className="px-2 py-1 text-[11px] text-ink-muted">Counts are not available right now.</p>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function Option({ checked, multi = false, onClick, children, count }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={checked}
-      onClick={onClick}
-      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm transition hover:bg-surface-raised ${
-        checked ? 'font-medium text-series1' : 'text-ink'
-      }`}
-    >
-      <span
-        aria-hidden="true"
-        className={`grid h-3.5 w-3.5 shrink-0 place-items-center border ${multi ? 'rounded' : 'rounded-full'} ${
-          checked ? 'border-series1 bg-series1' : 'border-hairline'
-        }`}
-      >
-        {checked && <span className={`block h-1.5 w-1.5 bg-white ${multi ? 'rounded-sm' : 'rounded-full'}`} />}
-      </span>
-      <span dir="auto" className="min-w-0 truncate">
-        {children}
-      </span>
-      <Count value={count} />
-    </button>
-  )
-}
+// Two toolbar glyphs the shared icon set does not have.
+const FilterIcon = ({ className = 'h-3.5 w-3.5' }) => (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true" focusable="false" className={`shrink-0 ${className}`}>
+    <path d="M2.5 4h11M4.5 8h7M6.5 12h3" />
+  </svg>
+)
+const SlidersIcon = ({ className = 'h-3.5 w-3.5' }) => (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true" focusable="false" className={`shrink-0 ${className}`}>
+    <path d="M2.5 5h6M11.5 5h2M2.5 11h2M7.5 11h6" />
+    <circle cx="10" cy="5" r="1.5" />
+    <circle cx="6" cy="11" r="1.5" />
+  </svg>
+)
 
 function toggleIn(list, value) {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value]
@@ -258,65 +132,6 @@ function MultiMenu({ icon, label, values, options, labels, facetKey, onChange, f
           )}
         </>
       )}
-    </MenuChip>
-  )
-}
-
-function AreaMenu({ value, areas, onChange, facetParams }) {
-  const [query, setQuery] = useState('')
-  const current = areas.find((a) => a.slug === value)
-  const needle = query.trim().toLowerCase()
-  const shown = needle
-    ? areas.filter((a) => a.name.toLowerCase().includes(needle) || a.slug.includes(needle))
-    : areas
-  return (
-    <MenuChip
-      icon={AreaIcon}
-      label="Area"
-      summary={value ? current?.name ?? value : null}
-      active={Boolean(value)}
-      facetParams={facetParams}
-      omit={['area']}
-      width="w-64"
-    >
-      {(facets, close) => {
-        const pick = (slug) => {
-          onChange(slug)
-          close()
-        }
-        return (
-          <>
-            {areas.length > 8 && (
-              <input
-                type="search"
-                aria-label="Find an area"
-                placeholder="Find an area…"
-                dir="auto"
-                autoFocus
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                className={`${control} mb-1 w-full border-hairline`}
-              />
-            )}
-            <div className="max-h-64 overflow-y-auto">
-              <Option checked={!value} onClick={() => pick('')} count={facets?.total}>
-                All areas
-              </Option>
-              {shown.map((a) => (
-                <Option
-                  key={a.slug}
-                  checked={value === a.slug}
-                  onClick={() => pick(a.slug)}
-                  count={facets ? facets.area?.[a.slug] ?? 0 : undefined}
-                >
-                  {a.name}
-                </Option>
-              ))}
-              {shown.length === 0 && <p className="px-2 py-1.5 text-xs text-ink-muted">No area matches.</p>}
-            </div>
-          </>
-        )
-      }}
     </MenuChip>
   )
 }
@@ -381,9 +196,13 @@ function TagMenu({ value, onChange, facetParams }) {
   )
 }
 
-function Group({ label, children }) {
+function Group({ label, stacked, children }) {
   return (
-    <div role="group" aria-label={label} className="flex flex-wrap items-center gap-1.5">
+    <div
+      role="group"
+      aria-label={label}
+      className={stacked ? 'flex flex-col items-stretch gap-1.5' : 'flex flex-wrap items-center gap-1.5'}
+    >
       <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted">{label}</span>
       {children}
     </div>
@@ -392,8 +211,8 @@ function Group({ label, children }) {
 
 function ActiveChip({ label, onRemove }) {
   return (
-    <span className="inline-flex max-w-full items-center gap-1 rounded-full border border-series1/40 bg-series1/5 py-0.5 pe-1 ps-2.5 text-xs text-series1">
-      <span dir="auto" className="truncate">
+    <span className="inline-flex max-w-[22rem] shrink-0 items-center gap-1 rounded-full border border-series1/40 bg-series1/5 py-0.5 pe-1 ps-2.5 text-xs text-series1">
+      <span dir="auto" className="truncate" title={label}>
         {label}
       </span>
       <button
@@ -445,11 +264,133 @@ const sortOf = (filters) => SORTS.find((s) => s.value === filters.sort) ?? SORTS
 const currentOrder = (filters) => filters.order || sortOf(filters).natural
 const orderLabel = (filters) => sortOf(filters)[currentOrder(filters)]
 
+/** Sort (with reverse), group-by and card density, behind one small button. */
+function ViewMenu({ filters, update, groupBy, onGroupBy, density, onDensity }) {
+  const [open, setOpen] = useState(false)
+  const [alignEnd, setAlignEnd] = useState(true)
+  const wrapRef = useRef(null)
+  const buttonRef = useRef(null)
+  const menuId = useId()
+  const sortId = useId()
+  useDismiss(open, setOpen, wrapRef, buttonRef)
+  const changed = filters.sort !== 'impact' || Boolean(filters.order) || groupBy !== 'none'
+  const sortName = sortOf(filters).label.replace(/ \(.*\)$/, '')
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        aria-label={`View: sorted by ${sortName}, ${orderLabel(filters)}${groupBy !== 'none' ? `, grouped by ${groupBy}` : ''}, ${density} cards`}
+        title="Sort, group and card density"
+        onClick={() => {
+          if (!open) setAlignEnd(flipsToEnd(buttonRef.current, 288))
+          setOpen((value) => !value)
+        }}
+        className={`${chipBase} ${chipTone(changed)} px-2.5 sm:px-3`}
+      >
+        <SlidersIcon />
+        <span className="hidden sm:inline">View</span>
+        {changed && <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-series1" />}
+      </button>
+      {open && (
+        <div
+          id={menuId}
+          role="group"
+          aria-label="View options"
+          className={`absolute top-full z-30 mt-1 w-72 max-w-[calc(100vw-2rem)] space-y-3 rounded-lg border border-hairline bg-surface p-3 shadow-lg ${
+            alignEnd ? 'end-0' : 'start-0'
+          }`}
+        >
+          <div className="space-y-1.5">
+            <label htmlFor={sortId} className="block text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+              Sort
+            </label>
+            <div className="flex items-center gap-1.5">
+              <select
+                id={sortId}
+                value={filters.sort}
+                onChange={(event) => update({ sort: event.target.value, order: '' })}
+                className={`${control} min-w-0 flex-1 ${filters.sort !== 'impact' ? 'border-series1 text-series1' : 'border-hairline'}`}
+              >
+                {SORTS.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => update({ order: currentOrder(filters) === 'asc' ? 'desc' : 'asc' })}
+                title="Reverse the order"
+                aria-label={`Reverse the order (now ${orderLabel(filters)})`}
+                className={`${control} shrink-0 ${filters.order ? 'border-series1 text-series1' : 'border-hairline'}`}
+              >
+                {orderLabel(filters)} ⇅
+              </button>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <span className="block text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Group by</span>
+            <Segmented
+              label="Group by"
+              value={groupBy}
+              onChange={onGroupBy}
+              options={[
+                { value: 'none', label: 'None', title: 'Plain columns' },
+                { value: 'side', label: 'Side', title: 'A swimlane per side' },
+                { value: 'assignee', label: 'Assignee', title: 'A swimlane per person' },
+              ]}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <span className="block text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Cards</span>
+            <Segmented
+              label="Card density"
+              value={density}
+              onChange={onDensity}
+              options={[
+                { value: 'comfortable', label: 'Comfortable', title: 'Full cards with every badge' },
+                { value: 'compact', label: 'Compact', title: 'Short cards: title, ID and icons' },
+              ]}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Keep Tab inside `node` (the phone filter sheet). */
+function trapTab(event, node) {
+  if (event.key !== 'Tab' || !node) return
+  const items = [...node.querySelectorAll('button, input, select, [href], [tabindex]:not([tabindex="-1"])')].filter(
+    (el) => !el.disabled && el.offsetParent !== null,
+  )
+  if (items.length === 0) return
+  const first = items[0]
+  const last = items[items.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
 /**
- * The board's filter bar. Row one: search, ready-made views, the result count
- * and how cards show. Row two: filter chips grouped as Who, What and Subtasks,
- * each with a menu that shows counts. Row three: the active filters, each
- * removable, and Clear all. Filters live in the URL (see useBoardFilters).
+ * The board's filter bar, built to leave the height to the tasks:
+ * - one toolbar row: the page title, search, ready-made views, a Filters button
+ *   with a count of active filters, the result count, a View menu (sort,
+ *   group-by, density) and the page action (`action`);
+ * - the filter chips (Who, What, Subtasks) in a panel the Filters button opens
+ *   and closes, or a side sheet on phones; the panel starts open until the
+ *   person has used it once (`filtersSeen`), then starts closed;
+ * - one thin row of removable chips for the active filters, only when any are on.
+ * Filters live in the URL (see useBoardFilters).
  */
 export default function BoardFilters({
   filters,
@@ -466,11 +407,23 @@ export default function BoardFilters({
   onGroupBy,
   density,
   onDensity,
+  isMobile = false,
+  filtersSeen = true,
+  onFiltersSeen = () => {},
+  title = null,
+  action = null,
 }) {
   const [areas, setAreas] = useState([])
   useEffect(() => {
     loadAreas().then(setAreas).catch(() => setAreas([]))
   }, [])
+  const tree = useMemo(() => buildAreaTree(areas), [areas])
+
+  const [panelOpen, setPanelOpen] = useState(!filtersSeen)
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const filtersButton = useRef(null)
+  const sheetRef = useRef(null)
+  const panelId = useId()
 
   // How many tasks are free to take with the other filters, for the Who chip.
   const { data: base } = useFacets(without(facetParams, ['ready', 'lane']), !isReadOnly)
@@ -512,102 +465,41 @@ export default function BoardFilters({
   }
   if (filters.side) add('side', SIDE_LABELS[filters.side] ?? filters.side, { side: '' })
   if (filters.area) {
-    add('area', `Area: ${areas.find((a) => a.slug === filters.area)?.name ?? filters.area}`, { area: '' })
+    const path = areaPath(tree, filters.area)
+    const below = tree.kids.has(filters.area) ? ' (with sub-areas)' : ''
+    add('area', `Area: ${path.join(' › ')}${below}`, { area: '' })
   }
   if (filters.tag) add('tag', `Tag: ${filters.tag}`, { tag: '' })
   if (filters.subtasks !== 'all') add('subtasks', SUBTASK_LABELS[filters.subtasks], { subtasks: 'all' })
+  // The search box shows its own state; the badge counts the rest.
+  const filterCount = active.filter((chip) => chip.key !== 'q').length
 
-  return (
-    <div className="flex min-w-0 flex-col gap-2.5" role="search" aria-label="Filter the board">
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="relative w-full sm:w-60">
-          <span className="sr-only">Search title, description and summary</span>
-          <SearchIcon className="pointer-events-none absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-muted" />
-          <input
-            type="search"
-            placeholder="Search, or HUB-12…"
-            dir="auto"
-            value={search}
-            onChange={(event) => onSearch(event.target.value)}
-            className={`${control} w-full ps-8 ${search ? 'border-series1' : 'border-hairline'}`}
-          />
-        </label>
+  const open = isMobile ? sheetOpen : panelOpen
+  function setOpen(next, { restoreFocus = false } = {}) {
+    if (isMobile) setSheetOpen(next)
+    else setPanelOpen(next)
+    onFiltersSeen()
+    if (!next && restoreFocus) filtersButton.current?.focus()
+  }
 
-        <div role="group" aria-label="Ready-made views" className="flex flex-wrap items-center gap-1.5">
-          {views.map((view) => {
-            const pressed = filtersMatch(filters, view.filters)
-            const Glyph = view.icon
-            return (
-              <button
-                key={view.key}
-                type="button"
-                aria-pressed={pressed}
-                title={view.title}
-                onClick={() => {
-                  onSearch('')
-                  replace(pressed ? {} : view.filters)
-                }}
-                className={`${chipBase} ${chipTone(pressed, view.key === 'decision' ? 'series2' : 'series1')}`}
-              >
-                <Glyph />
-                {view.label}
-              </button>
-            )
-          })}
-        </div>
+  // The sheet takes focus when it opens.
+  useEffect(() => {
+    if (isMobile && sheetOpen) sheetRef.current?.querySelector('button, input')?.focus()
+  }, [isMobile, sheetOpen])
 
-        <span className="tabular text-xs text-ink-muted" role="status" aria-live="polite">
-          {refreshing ? 'Updating…' : `${resultCount} task${resultCount === 1 ? '' : 's'}`}
-        </span>
+  function onPanelKey(event) {
+    // A menu inside handles its own Escape first (see useDismiss).
+    if (event.key === 'Escape' && !event.defaultPrevented) {
+      event.preventDefault()
+      setOpen(false, { restoreFocus: true })
+    }
+  }
 
-        <div className="ms-auto flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-1.5 text-xs text-ink-secondary">
-            Sort
-            <select
-              value={filters.sort}
-              onChange={(event) => update({ sort: event.target.value, order: '' })}
-              className={`${control} ${filters.sort !== 'impact' || filters.order ? 'border-series1 text-series1' : 'border-hairline'}`}
-            >
-              {SORTS.map((s) => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            onClick={() => update({ order: currentOrder(filters) === 'asc' ? 'desc' : 'asc' })}
-            title="Reverse the order"
-            aria-label={`Reverse the order (now ${orderLabel(filters)})`}
-            className={`${control} border-hairline`}
-          >
-            {orderLabel(filters)} ⇅
-          </button>
-          <label className="flex items-center gap-1.5 text-xs text-ink-secondary">
-            Group by
-            <select
-              value={groupBy}
-              onChange={(event) => onGroupBy(event.target.value)}
-              className={`${control} ${groupBy !== 'none' ? 'border-series1 text-series1' : 'border-hairline'}`}
-            >
-              <option value="none">None</option>
-              <option value="side">Side</option>
-              <option value="assignee">Assignee</option>
-            </select>
-          </label>
-          <Segmented
-            label="Card density"
-            value={density}
-            onChange={onDensity}
-            options={[
-              { value: 'comfortable', label: 'Comfortable', title: 'Full cards with every badge' },
-              { value: 'compact', label: 'Compact', title: 'Short cards: title, ID and icons' },
-            ]}
-          />
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <Group label="Who">
+  const stacked = isMobile
+  const groups = (
+    <>
+      <Group label="Who" stacked={stacked}>
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             aria-pressed={filters.mine}
@@ -633,32 +525,6 @@ export default function BoardFilters({
               )}
             </button>
           )}
-          {filters.ready && (
-            <MenuChip
-              icon={StatusIcon}
-              label="Lane"
-              summary={filters.lane ? LANE_LABELS[filters.lane] : null}
-              active={Boolean(filters.lane)}
-              facetParams={facetParams}
-              omit={['lane']}
-            >
-              {(facets, close) =>
-                ['', 'planned', 'backlog'].map((lane) => (
-                  <Option
-                    key={lane || 'both'}
-                    checked={filters.lane === lane}
-                    onClick={() => {
-                      update({ lane })
-                      close()
-                    }}
-                    count={facets ? (lane ? facets.lane?.[lane] ?? 0 : facets.total) : undefined}
-                  >
-                    {lane ? LANE_LABELS[lane] : 'Both'}
-                  </Option>
-                ))
-              }
-            </MenuChip>
-          )}
           {isLead && (
             <button
               type="button"
@@ -671,138 +537,323 @@ export default function BoardFilters({
               From agents
             </button>
           )}
-        </Group>
-
-        <Group label="What">
-          <MultiMenu
+        </div>
+        {filters.ready && (
+          <MenuChip
             icon={StatusIcon}
-            label="Status"
-            values={filters.status}
-            options={statusOptions}
-            labels={STATUS_LABELS}
-            facetKey="status"
-            onChange={(status) => update({ status })}
+            label="Lane"
+            summary={filters.lane ? LANE_LABELS[filters.lane] : null}
+            active={Boolean(filters.lane)}
             facetParams={facetParams}
-            omit={['statuses']}
-          />
-          <MultiMenu
-            icon={PriorityIcon}
-            label="Priority"
-            values={filters.priority}
-            options={[...PRIORITIES].reverse()}
-            labels={PRIORITY_LABELS}
-            facetKey="priority"
-            onChange={(priority) => update({ priority })}
-            facetParams={facetParams}
-            omit={['priority']}
-          />
-          <MultiMenu
-            icon={KindIcon}
-            label="Kind"
-            values={filters.kind}
-            options={TASK_KINDS}
-            labels={KIND_LABELS}
-            facetKey="kind"
-            onChange={(kind) => update({ kind })}
-            facetParams={facetParams}
-            omit={['kinds']}
-          />
-          <MultiMenu
-            icon={AudienceIcon}
-            label="Audience"
-            values={filters.audience}
-            options={AUDIENCE_FILTER_VALUES}
-            labels={AUDIENCE_LABELS}
-            facetKey="audience"
-            onChange={(audience) => update({ audience })}
-            facetParams={facetParams}
-            omit={['audience']}
-          />
-          <MenuChip
-            icon={SideIcon}
-            label="Side"
-            summary={filters.side ? SIDE_LABELS[filters.side] ?? filters.side : null}
-            active={Boolean(filters.side)}
-            facetParams={facetParams}
-            omit={['side']}
-          >
-            {(facets, close) => {
-              const pick = (side) => {
-                update({ side })
-                close()
-              }
-              return (
-                <>
-                  <Option checked={!filters.side} onClick={() => pick('')} count={facets?.total}>
-                    All sides
-                  </Option>
-                  {SIDES.map((value) => (
-                    <Option
-                      key={value}
-                      checked={filters.side === value}
-                      onClick={() => pick(value)}
-                      count={facets ? facets.side?.[value] ?? 0 : undefined}
-                    >
-                      {SIDE_LABELS[value]}
-                    </Option>
-                  ))}
-                </>
-              )
-            }}
-          </MenuChip>
-          {areas.length > 0 && (
-            <AreaMenu value={filters.area} areas={areas} onChange={(area) => update({ area })} facetParams={facetParams} />
-          )}
-          <TagMenu value={filters.tag} onChange={(tag) => update({ tag })} facetParams={facetParams} />
-        </Group>
-
-        <Group label="Subtasks">
-          <MenuChip
-            icon={SubtasksIcon}
-            label={SUBTASK_LABELS[filters.subtasks]}
-            active={filters.subtasks !== 'all'}
-            facetParams={facetParams}
-            omit={['subtasks']}
+            omit={['lane']}
           >
             {(facets, close) =>
-              ['all', 'top', 'only'].map((value) => {
-                let count
-                if (facets) {
-                  const total = facets.total ?? 0
-                  const subtasks = facets.subtasks ?? 0
-                  count = value === 'all' ? total : value === 'only' ? subtasks : Math.max(0, total - subtasks)
-                }
-                return (
-                  <Option
-                    key={value}
-                    checked={filters.subtasks === value}
-                    onClick={() => {
-                      update({ subtasks: value })
-                      close()
-                    }}
-                    count={count}
-                  >
-                    {SUBTASK_LABELS[value]}
-                  </Option>
-                )
-              })
+              ['', 'planned', 'backlog'].map((lane) => (
+                <Option
+                  key={lane || 'both'}
+                  checked={filters.lane === lane}
+                  onClick={() => {
+                    update({ lane })
+                    close()
+                  }}
+                  count={facets ? (lane ? facets.lane?.[lane] ?? 0 : facets.total) : undefined}
+                >
+                  {lane ? LANE_LABELS[lane] : 'Both'}
+                </Option>
+              ))
             }
           </MenuChip>
-        </Group>
+        )}
+      </Group>
+
+      <Group label="What" stacked={stacked}>
+        <MultiMenu
+          icon={StatusIcon}
+          label="Status"
+          values={filters.status}
+          options={statusOptions}
+          labels={STATUS_LABELS}
+          facetKey="status"
+          onChange={(status) => update({ status })}
+          facetParams={facetParams}
+          omit={['statuses']}
+        />
+        <MultiMenu
+          icon={PriorityIcon}
+          label="Priority"
+          values={filters.priority}
+          options={[...PRIORITIES].reverse()}
+          labels={PRIORITY_LABELS}
+          facetKey="priority"
+          onChange={(priority) => update({ priority })}
+          facetParams={facetParams}
+          omit={['priority']}
+        />
+        <MultiMenu
+          icon={KindIcon}
+          label="Kind"
+          values={filters.kind}
+          options={TASK_KINDS}
+          labels={KIND_LABELS}
+          facetKey="kind"
+          onChange={(kind) => update({ kind })}
+          facetParams={facetParams}
+          omit={['kinds']}
+        />
+        <MultiMenu
+          icon={AudienceIcon}
+          label="Audience"
+          values={filters.audience}
+          options={AUDIENCE_FILTER_VALUES}
+          labels={AUDIENCE_LABELS}
+          facetKey="audience"
+          onChange={(audience) => update({ audience })}
+          facetParams={facetParams}
+          omit={['audience']}
+        />
+        <MenuChip
+          icon={SideIcon}
+          label="Side"
+          summary={filters.side ? SIDE_LABELS[filters.side] ?? filters.side : null}
+          active={Boolean(filters.side)}
+          facetParams={facetParams}
+          omit={['side']}
+        >
+          {(facets, close) => {
+            const pick = (side) => {
+              update({ side })
+              close()
+            }
+            return (
+              <>
+                <Option checked={!filters.side} onClick={() => pick('')} count={facets?.total}>
+                  All sides
+                </Option>
+                {SIDES.map((value) => (
+                  <Option
+                    key={value}
+                    checked={filters.side === value}
+                    onClick={() => pick(value)}
+                    count={facets ? facets.side?.[value] ?? 0 : undefined}
+                  >
+                    {SIDE_LABELS[value]}
+                  </Option>
+                ))}
+              </>
+            )
+          }}
+        </MenuChip>
+        {areas.length > 0 && (
+          <AreaTreeMenu
+            key={filters.area}
+            value={filters.area}
+            tree={tree}
+            onChange={(area) => update({ area })}
+            facetParams={facetParams}
+          />
+        )}
+        <TagMenu value={filters.tag} onChange={(tag) => update({ tag })} facetParams={facetParams} />
+      </Group>
+
+      <Group label="Subtasks" stacked={stacked}>
+        <MenuChip
+          icon={SubtasksIcon}
+          label={SUBTASK_LABELS[filters.subtasks]}
+          active={filters.subtasks !== 'all'}
+          facetParams={facetParams}
+          omit={['subtasks']}
+        >
+          {(facets, close) =>
+            ['all', 'top', 'only'].map((value) => {
+              let count
+              if (facets) {
+                const total = facets.total ?? 0
+                const subtasks = facets.subtasks ?? 0
+                count = value === 'all' ? total : value === 'only' ? subtasks : Math.max(0, total - subtasks)
+              }
+              return (
+                <Option
+                  key={value}
+                  checked={filters.subtasks === value}
+                  onClick={() => {
+                    update({ subtasks: value })
+                    close()
+                  }}
+                  count={count}
+                >
+                  {SUBTASK_LABELS[value]}
+                </Option>
+              )
+            })
+          }
+        </MenuChip>
+      </Group>
+    </>
+  )
+
+  const countText = refreshing ? 'Updating…' : `${resultCount} task${resultCount === 1 ? '' : 's'}`
+  const clearAll = () => {
+    onSearch('')
+    replace({})
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-2" role="search" aria-label="Filter the board">
+      <div className="flex flex-wrap items-center gap-2">
+        {title}
+
+        <label className="relative min-w-0 flex-1 sm:w-56 sm:flex-none">
+          <span className="sr-only">Search title, description and summary</span>
+          <SearchIcon className="pointer-events-none absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-muted" />
+          <input
+            type="search"
+            placeholder="Search, or HUB-12…"
+            dir="auto"
+            value={search}
+            onChange={(event) => onSearch(event.target.value)}
+            className={`${control} w-full ps-8 ${search ? 'border-series1' : 'border-hairline'}`}
+          />
+        </label>
+
+        {/* Phones and narrow laptops: the views get their own line that scrolls sideways. */}
+        <div
+          role="group"
+          aria-label="Ready-made views"
+          className="board-scroll order-last -mx-1 flex w-full items-center gap-1.5 overflow-x-auto px-1 xl:order-none xl:mx-0 xl:w-auto xl:overflow-visible xl:px-0"
+        >
+          {views.map((view) => {
+            const pressed = filtersMatch(filters, view.filters)
+            const Glyph = view.icon
+            return (
+              <button
+                key={view.key}
+                type="button"
+                aria-pressed={pressed}
+                title={view.title}
+                onClick={() => {
+                  onSearch('')
+                  replace(pressed ? {} : view.filters)
+                }}
+                className={`${chipBase} shrink-0 ${chipTone(pressed, view.key === 'decision' ? 'series2' : 'series1')}`}
+              >
+                <Glyph />
+                {view.label}
+              </button>
+            )
+          })}
+        </div>
+
+        <button
+          ref={filtersButton}
+          type="button"
+          aria-expanded={open}
+          aria-controls={open ? panelId : undefined}
+          aria-label={`Filters${filterCount ? `, ${filterCount} on` : ''}`}
+          onClick={() => setOpen(!open)}
+          onKeyDown={(event) => open && onPanelKey(event)}
+          className={`${chipBase} ${chipTone(open || filterCount > 0)} px-2.5 sm:px-3`}
+        >
+          <FilterIcon />
+          <span className="hidden sm:inline">Filters</span>
+          {filterCount > 0 && (
+            <span className="tabular grid h-4 min-w-[1rem] place-items-center rounded-full bg-series1 px-1 text-[10px] font-semibold text-white">
+              {filterCount}
+            </span>
+          )}
+        </button>
+
+        <span
+          className="tabular sr-only whitespace-nowrap text-xs text-ink-muted sm:not-sr-only"
+          role="status"
+          aria-live="polite"
+        >
+          {countText}
+        </span>
+
+        <div className="ms-auto flex items-center gap-2">
+          <ViewMenu
+            filters={filters}
+            update={update}
+            groupBy={groupBy}
+            onGroupBy={onGroupBy}
+            density={density}
+            onDensity={onDensity}
+          />
+          {action}
+        </div>
       </div>
 
+      {!isMobile && panelOpen && (
+        <div
+          id={panelId}
+          role="region"
+          aria-label="Filters"
+          onKeyDown={onPanelKey}
+          className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-hairline bg-surface-raised/40 px-3 py-2"
+        >
+          {groups}
+        </div>
+      )}
+
+      {isMobile && sheetOpen && (
+        <div className="fixed inset-0 z-50" onKeyDown={onPanelKey}>
+          <div aria-hidden="true" className="absolute inset-0 bg-black/40" onMouseDown={() => setOpen(false, { restoreFocus: true })} />
+          <div
+            ref={sheetRef}
+            id={panelId}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Filters"
+            onKeyDown={(event) => trapTab(event, sheetRef.current)}
+            className="absolute inset-y-0 end-0 flex w-[min(22rem,90vw)] flex-col border-s border-hairline bg-surface shadow-xl"
+          >
+            <div className="flex items-center gap-2 border-b border-hairline px-4 py-3">
+              <h2 className="text-sm font-semibold">Filters</h2>
+              {filterCount > 0 && (
+                <button
+                  type="button"
+                  onClick={clearAll}
+                  className="text-xs text-ink-secondary underline-offset-2 hover:text-ink hover:underline"
+                >
+                  Clear all
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setOpen(false, { restoreFocus: true })}
+                aria-label="Close filters"
+                className="ms-auto grid h-8 w-8 place-items-center rounded-lg text-ink-secondary hover:bg-surface-raised hover:text-ink"
+              >
+                <CloseIcon />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
+              <InlineMenus.Provider value>{groups}</InlineMenus.Provider>
+            </div>
+            <div className="border-t border-hairline px-4 py-3">
+              <button
+                type="button"
+                onClick={() => setOpen(false, { restoreFocus: true })}
+                className="h-9 w-full rounded-lg bg-series1 text-sm font-medium text-white hover:opacity-90"
+              >
+                Show {countText.toLowerCase()}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {active.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5" aria-label="Active filters">
-          {active.map((chip) => (
-            <ActiveChip key={chip.key} label={chip.label} onRemove={chip.remove} />
-          ))}
+        <div className="flex min-w-0 items-center gap-1.5" aria-label="Active filters" role="group">
+          <div className="board-scroll flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
+            {active.map((chip) => (
+              <ActiveChip key={chip.key} label={chip.label} onRemove={chip.remove} />
+            ))}
+          </div>
           <button
             type="button"
-            onClick={() => {
-              onSearch('')
-              replace({})
-            }}
-            className="h-6 rounded-md px-2 text-xs text-ink-secondary underline-offset-2 hover:text-ink hover:underline"
+            onClick={clearAll}
+            className="h-6 shrink-0 rounded-md px-2 text-xs text-ink-secondary underline-offset-2 hover:text-ink hover:underline"
           >
             Clear all
           </button>

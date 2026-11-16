@@ -16,9 +16,36 @@ export async function loadAreas(force = false) {
 
 function matches(area, q) {
   if (!q) return true
-  const hay = [area.slug, area.name, area.description ?? '', ...(area.aliases ?? [])].join(' ').toLowerCase()
+  const hay = [area.slug, area.name, area.description ?? '', ...(area.aliases ?? []), ...(area.path ?? [])]
+    .join(' ')
+    .toLowerCase()
   return hay.includes(q.toLowerCase())
 }
+
+/** The flat list in tree order (each parent followed by its sub-areas), each with its depth. */
+function inTreeOrder(areas) {
+  const bySlug = new Map(areas.map((a) => [a.slug, a]))
+  const kids = new Map()
+  const tops = []
+  for (const a of areas) {
+    if (a.parent && bySlug.has(a.parent)) {
+      if (!kids.has(a.parent)) kids.set(a.parent, [])
+      kids.get(a.parent).push(a)
+    } else tops.push(a)
+  }
+  const out = []
+  const walk = (list, depth, seen) => {
+    for (const a of [...list].sort((x, y) => x.name.localeCompare(y.name))) {
+      if (seen.has(a.slug)) continue
+      out.push({ area: a, depth })
+      walk(kids.get(a.slug) ?? [], depth + 1, new Set([...seen, a.slug]))
+    }
+  }
+  walk(tops, 0, new Set())
+  return out
+}
+
+const parentPath = (area) => (area.path?.length > 1 ? area.path.slice(0, -1).join(' › ') : '')
 
 /**
  * Pick a product area, search by name, slug or alias, or add one. Adding goes
@@ -48,7 +75,14 @@ export default function AreaPicker({ id, value, onChange, suggestion = null }) {
   }, [])
 
   const selected = areas.find((a) => a.slug === value) ?? null
-  const shown = useMemo(() => areas.filter((a) => matches(a, query.trim())).slice(0, 12), [areas, query])
+  const ordered = useMemo(() => inTreeOrder(areas), [areas])
+  // With no search, the whole tree; with one, the matches (still grouped under their parents).
+  const shownRows = useMemo(() => {
+    const q = query.trim()
+    // Matches show their path in the label instead of the indent.
+    return q ? ordered.filter((row) => matches(row.area, q)).slice(0, 30).map((row) => ({ ...row, depth: 0 })) : ordered
+  }, [ordered, query])
+  const shown = shownRows.map((row) => row.area)
   const exact = areas.some((a) => a.name.toLowerCase() === query.trim().toLowerCase() || a.slug === query.trim())
 
   function pick(slug) {
@@ -82,8 +116,11 @@ export default function AreaPicker({ id, value, onChange, suggestion = null }) {
     <div ref={boxRef} className="relative mt-1.5">
       {selected && !open ? (
         <div className="flex items-center gap-2 rounded-lg border border-hairline bg-surface-raised px-3 py-2 text-sm">
-          <span className="font-medium" dir="auto">{selected.name}</span>
-          <code className="text-xs text-ink-muted">{selected.slug}</code>
+          <span className="min-w-0 truncate" dir="auto">
+            {parentPath(selected) && <span className="text-ink-muted">{parentPath(selected)} › </span>}
+            <span className="font-medium">{selected.name}</span>
+          </span>
+          <code className="hidden text-xs text-ink-muted sm:inline">{selected.slug}</code>
           <button type="button" className="ms-auto text-xs text-ink-secondary hover:text-ink" onClick={() => setOpen(true)}>
             Change
           </button>
@@ -125,16 +162,26 @@ export default function AreaPicker({ id, value, onChange, suggestion = null }) {
       )}
       {open && (
         <div className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-lg border border-hairline bg-surface p-1 shadow-lg">
-          {shown.map((a) => (
+          {shownRows.map(({ area: a, depth }) => (
             <button
               key={a.slug}
               type="button"
               onClick={() => pick(a.slug)}
-              className="block w-full rounded-md px-2 py-1.5 text-start text-sm hover:bg-surface-raised"
+              title={a.path?.join(' › ')}
+              style={{ paddingInlineStart: `${0.5 + Math.min(depth, 4) * 1.25}rem` }}
+              className={`block w-full rounded-md py-1.5 pe-2 text-start text-sm hover:bg-surface-raised ${
+                a.slug === value ? 'bg-surface-raised' : ''
+              } ${depth === 0 && a.children_count > 0 ? 'mt-1 first:mt-0' : ''}`}
             >
-              <span className="font-medium" dir="auto">{a.name}</span>{' '}
+              <span className="float-end ms-2 text-xs tabular text-ink-muted">
+                {a.children_count > 0 ? `${a.subtree_open} open with sub-areas` : `${a.open_count} open`}
+              </span>
+              {depth > 0 && <span aria-hidden="true" className="text-ink-muted">└ </span>}
+              {parentPath(a) && (
+                <span className={query.trim() ? 'text-xs text-ink-muted' : 'sr-only'} dir="auto">{parentPath(a)} › </span>
+              )}
+              <span className={depth === 0 ? 'font-medium' : ''} dir="auto">{a.name}</span>{' '}
               <code className="text-xs text-ink-muted">{a.slug}</code>
-              <span className="float-end text-xs text-ink-muted">{a.open_count} open</span>
               {(a.description || a.aliases?.length > 0) && (
                 <span className="block truncate text-xs text-ink-muted" dir="auto">
                   {[a.description, a.aliases?.length ? `also: ${a.aliases.join(', ')}` : null].filter(Boolean).join(' · ')}

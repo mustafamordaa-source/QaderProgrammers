@@ -185,19 +185,78 @@ def clear_pick(suggestions: list[AreaSuggestion]) -> AreaSuggestion | None:
 # --- routes -------------------------------------------------------------------
 
 
-def _area_out(db: Session, a: Area) -> AreaOut:
-    from app.models import CLOSED_STATUSES
+class _Tree:
+    """Every area with its children and task counts (only tasks the user may see), in two queries."""
 
-    total = db.scalar(select(func.count(Task.id)).where(Task.area_id == a.id)) or 0
-    open_ = db.scalar(select(func.count(Task.id)).where(
-        Task.area_id == a.id, Task.status.not_in(list(CLOSED_STATUSES)))) or 0
-    parent = db.get(Area, a.parent_id) if a.parent_id else None
-    merged = db.get(Area, a.merged_into_id) if a.merged_into_id else None
+    def __init__(self, db: Session, user: User | None):
+        from collections import Counter, defaultdict
+
+        from app.models import CLOSED_STATUSES
+        from app.routers.tasks import _visible_filter
+
+        self.by_id = {a.id: a for a in db.scalars(select(Area))}
+        self.kids: dict[int, list[Area]] = defaultdict(list)
+        for a in self.by_id.values():
+            if a.parent_id and a.merged_into_id is None:
+                self.kids[a.parent_id].append(a)
+        for v in self.kids.values():
+            v.sort(key=lambda x: x.name.lower())
+        stmt = select(Task.area_id, Task.status).where(Task.area_id.is_not(None))
+        visible = _visible_filter(user) if user is not None else None
+        if visible is not None:
+            stmt = stmt.where(visible)
+        self.total, self.open = Counter(), Counter()
+        for area_id, st in db.execute(stmt):
+            self.total[area_id] += 1
+            if st not in CLOSED_STATUSES:
+                self.open[area_id] += 1
+        self._sub: dict[int, tuple[int, int]] = {}
+
+    def subtree(self, a: Area, seen: frozenset = frozenset()) -> tuple[int, int]:
+        if a.id in self._sub:
+            return self._sub[a.id]
+        o, t = self.open[a.id], self.total[a.id]
+        for k in self.kids.get(a.id, []):
+            if k.id not in seen:
+                ko, kt = self.subtree(k, seen | {a.id})
+                o, t = o + ko, t + kt
+        self._sub[a.id] = (o, t)
+        return o, t
+
+    def path(self, a: Area) -> list[Area]:
+        chain, node, seen = [], a, set()
+        while node is not None and node.id not in seen:
+            seen.add(node.id)
+            chain.append(node)
+            node = self.by_id.get(node.parent_id) if node.parent_id else None
+        return list(reversed(chain))
+
+
+def _area_out(db: Session, a: Area, user: User | None = None, tree: _Tree | None = None) -> AreaOut:
+    tree = tree or _Tree(db, user)
+    parent = tree.by_id.get(a.parent_id) if a.parent_id else None
+    merged = tree.by_id.get(a.merged_into_id) if a.merged_into_id else None
+    chain = tree.path(a)
+    kids = tree.kids.get(a.id, [])
+    sub_open, sub_total = tree.subtree(a)
     return AreaOut(
         id=a.id, slug=a.slug, name=a.name, description=a.description, aliases=a.aliases or [],
         parent=parent.slug if parent else None, merged_into=merged.slug if merged else None,
-        created_at=a.created_at, open_count=open_, total_count=total,
+        created_at=a.created_at, open_count=tree.open[a.id], total_count=tree.total[a.id],
+        parent_name=parent.name if parent else None, depth=len(chain) - 1, path=[x.name for x in chain],
+        children=[k.slug for k in kids], children_count=len(kids),
+        subtree_open=sub_open, subtree_total=sub_total,
     )
+
+
+def _nested(db: Session, a: Area, tree: _Tree, by_open: bool, seen: frozenset = frozenset()) -> AreaOut:
+    out = _area_out(db, a, tree=tree)
+    kids = [k for k in tree.kids.get(a.id, []) if k.id not in seen]
+    rows = [_nested(db, k, tree, by_open, seen | {a.id}) for k in kids]
+    if by_open:
+        rows.sort(key=lambda r: (-r.subtree_open, r.name.lower()))
+    out.subareas = rows
+    return out
 
 
 @router.get("", response_model=list[AreaOut])
@@ -208,8 +267,24 @@ def list_areas(
     paging: Page,
     q: str | None = Query(default=None, max_length=100, description="Match name, slug, alias or description"),
     include_merged: bool = False,
+    tree: bool = Query(default=False, description="Top-level areas only, each with its sub-areas nested"),
+    top: bool = Query(default=False, description="Top-level areas only, flat"),
+    sort: str = Query(default="name", pattern=r"^(name|open)$", description="name, or open: most open work first"),
 ) -> list[AreaOut]:
+    ctx = _Tree(db, auth.user)
+    by_open = sort == "open"
+    if tree and not q:
+        tops = sorted((a for a in ctx.by_id.values() if a.merged_into_id is None
+                       and (a.parent_id is None or a.parent_id not in ctx.by_id)), key=lambda a: a.name.lower())
+        if paging.on:
+            tops = paging.slice(tops, response)
+        rows = [_nested(db, a, ctx, by_open) for a in tops]
+        if by_open:
+            rows.sort(key=lambda r: (-r.subtree_open, r.name.lower()))
+        return rows
     rows = list(db.scalars(select(Area).order_by(Area.slug)))
+    if top:
+        rows = [a for a in rows if a.parent_id is None]
     if not include_merged:
         rows = [a for a in rows if a.merged_into_id is None]
     if q:
@@ -219,10 +294,11 @@ def list_areas(
             return wanted in normalize(hay) or max(
                 [name_score(q, a.name)] + [name_score(q, x) for x in a.aliases or []]) >= 60
         rows = [a for a in rows if hit(a)]
+    if by_open:
+        rows.sort(key=lambda a: (-ctx.subtree(a)[0], a.name.lower()))
     if paging.on:
-        # Counts are worked out for the rows of this page only.
         rows = paging.slice(rows, response)
-    return [_area_out(db, a) for a in rows]
+    return [_area_out(db, a, tree=ctx) for a in rows]
 
 
 def _slugify(name: str) -> str:
@@ -274,7 +350,7 @@ def create_area(payload: AreaCreate, db: DbSession, auth: AuthCtx) -> AreaOut:
     )
     db.add(area)
     db.commit()
-    return _area_out(db, area)
+    return _area_out(db, area, auth.user)
 
 
 @router.patch("/{slug}", response_model=AreaOut)
@@ -300,7 +376,7 @@ def update_area(slug: str, payload: AreaUpdate, db: DbSession, _lead: User = Dep
                 node = db.get(Area, node.parent_id) if node.parent_id else None
             area.parent_id = parent.id
     db.commit()
-    return _area_out(db, area)
+    return _area_out(db, area, _lead)
 
 
 @router.post("/{slug}/merge", response_model=AreaOut)
@@ -318,7 +394,7 @@ def merge_area(slug: str, payload: AreaMerge, db: DbSession, _lead: User = Depen
     target.aliases = (list(target.aliases or []) + extra)[:15]
     source.merged_into_id = target.id
     db.commit()
-    return _area_out(db, target)
+    return _area_out(db, target, _lead)
 
 
 def similar_tasks(payload: SimilarRequest, db: DbSession, auth: Auth) -> SimilarOut:

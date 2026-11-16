@@ -231,6 +231,14 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   rule is the only thing in the way, by sending `cross_side_reason` (10 to 500
   characters): the hub posts it as a note and tells the people on the task
   and its family. Rows say `cross_side_ok`.
+- **Area tree**: areas may have a parent; filtering by a parent includes its
+  sub-areas. `GET /areas` rows carry `depth`, `path`, `children`,
+  `children_count` and `subtree_open` / `subtree_total` (the area plus
+  everything below it, counting only tasks the caller may see). `tree=true`
+  nests `subareas`, `top=true` lists the top level, `sort=open` puts the most
+  open work first. Facets add `area_tree`: counts rolled up to every parent.
+  The redesign lives under `platform-design`, one "Redesign: …" sub-area per
+  product.
 - **Take one part**: `POST /tasks/{id}/criteria/{n}/take` turns acceptance
   criterion `n` into a subtask on the parent's side, links the part to it and
   claims it for you. One person per part, many people per task. When the

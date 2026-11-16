@@ -1119,7 +1119,8 @@ def facets(
             Comment.kind == CommentKind.question, Comment.resolved_at.is_(None), Comment.to_user_id.in_(asked),
         )))
     out = FacetsOut(total=0, status={}, priority={}, kind={}, side={}, area={}, lane={}, claimable=0, subtasks=0,
-                    audience={})
+                    audience={}, area_tree={})
+    all_areas = {a.id: a for a in db.scalars(select(Area))}
 
     def bump(bucket: dict, key) -> None:
         if key is not None:
@@ -1142,6 +1143,11 @@ def facets(
         bump(out.kind, t.kind.value)
         bump(out.side, t.side.value if t.side else "none")
         bump(out.area, t.area.slug if t.area else "none")
+        node, seen = (all_areas.get(t.area_id) if t.area_id else None), set()
+        while node is not None and node.id not in seen:
+            seen.add(node.id)
+            bump(out.area_tree, node.slug)
+            node = all_areas.get(node.parent_id) if node.parent_id else None
         bump(out.lane, LANES.get(t.status))
         bump(out.audience, t.audience or "none")
     return out
@@ -1728,6 +1734,7 @@ def brief(task_id: int, auth: AuthCtx, db: DbSession) -> TaskBrief:
         links=[link.label for link in _links_out(task)][:10],
         truncated=truncated,
         audience=task.audience,
+        area=task.area.slug if task.area else None,
         cross_side_ok=code == "other_side" and _claim_block(task, auth.user, now, ignore_side=True)[0] is None,
         claimable=claimable,
         claim_block=code,

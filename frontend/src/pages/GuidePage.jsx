@@ -175,6 +175,10 @@ const SECTIONS = [
         text: 'Every task can have one area, such as Payments or Exams. Pick it in the Area field: search by name, slug or another word people use for it. Left empty, the hub picks the area itself when the text clearly fits one. The Areas page lists them all with their open tasks; click one to see its board.',
       },
       {
+        type: 'p',
+        text: 'Areas form a tree. A big area such as Platform design holds sub-areas such as "Redesign: Exams engine". The Areas page shows each top-level area with its sub-areas under it and the open work for the whole branch; sort it by name or by open work. Filter the board by a parent and you get its sub-areas too. Pick the narrowest area that fits, and reuse one before you add a new one.',
+      },
+      {
         type: 'list',
         items: [
           'Reuse an area before you add one. The hub refuses a new name close to an existing area or alias and shows the close ones. Add it anyway only when yours is different.',
