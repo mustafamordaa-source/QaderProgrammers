@@ -427,6 +427,19 @@ function Segmented({ label, value, options, onChange }) {
   )
 }
 
+// Sorts and the direction each starts in (oldest first is the board default).
+const SORTS = [
+  { value: 'created', label: 'Created', asc: 'Oldest first', desc: 'Newest first', natural: 'asc' },
+  { value: 'updated', label: 'Last change', asc: 'Least recent first', desc: 'Most recent first', natural: 'desc' },
+  { value: 'priority', label: 'Priority', asc: 'Urgent first', desc: 'Low first', natural: 'asc' },
+  { value: 'points', label: 'Effort', asc: 'Easiest first', desc: 'Biggest first', natural: 'asc' },
+  { value: 'due', label: 'Due date', asc: 'Soonest first', desc: 'Latest first', natural: 'asc' },
+  { value: 'title', label: 'Title', asc: 'A to Z', desc: 'Z to A', natural: 'asc' },
+]
+const sortOf = (filters) => SORTS.find((s) => s.value === filters.sort) ?? SORTS[0]
+const currentOrder = (filters) => filters.order || sortOf(filters).natural
+const orderLabel = (filters) => sortOf(filters)[currentOrder(filters)]
+
 /**
  * The board's filter bar. Row one: search, ready-made views, the result count
  * and how cards show. Row two: filter chips grouped as Who, What and Subtasks,
@@ -538,6 +551,27 @@ export default function BoardFilters({
         </span>
 
         <div className="ms-auto flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-ink-secondary">
+            Sort
+            <select
+              value={filters.sort}
+              onChange={(event) => update({ sort: event.target.value, order: '' })}
+              className={`${control} ${filters.sort !== 'created' || filters.order ? 'border-series1 text-series1' : 'border-hairline'}`}
+            >
+              {SORTS.map((s) => (
+                <option key={s.value} value={s.value}>{s.label}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => update({ order: currentOrder(filters) === 'asc' ? 'desc' : 'asc' })}
+            title="Reverse the order"
+            aria-label={`Reverse the order (now ${orderLabel(filters)})`}
+            className={`${control} border-hairline`}
+          >
+            {orderLabel(filters)} ⇅
+          </button>
           <label className="flex items-center gap-1.5 text-xs text-ink-secondary">
             Group by
             <select

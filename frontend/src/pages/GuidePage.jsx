@@ -368,7 +368,7 @@ const SECTIONS = [
       { type: 'h3', text: 'The Free to take view' },
       {
         type: 'p',
-        text: 'Press Free to take at the top of the board to see only what you can take now: To do first, then Backlog. Each card says Planned or Backlog. The other views are My work, Needs decision and Blocked. Filters stay in the address bar, so you can send a filtered board as a link.',
+        text: 'Press Free to take at the top of the board to see only what you can take now: To do first, then Backlog. Each card says Planned or Backlog. The other views are My work, Needs decision and Blocked. Filters stay in the address bar, so you can send a filtered board as a link. Sort orders every column: Created (oldest first, the default, so open work gets finished before new work starts), Last change, Priority (urgent first), Effort (easiest first), Due date or Title; the arrow button reverses it. In the CLI: qhub ready --sort priority, qhub ls --sort points --desc.',
       },
       { type: 'h3', text: 'From the CLI' },
       {

@@ -22,7 +22,7 @@ from datetime import timedelta
 from pydantic import ValidationError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app import lint
@@ -805,7 +805,13 @@ def list_tasks(
         default=None, pattern=r"^(me|leads)$",
         description="With awaiting_decision: 'me' (default) or, for a lead, 'leads' for questions to any lead",
     ),
-    sort: str = Query(default="created", pattern=r"^(created|updated)$", description="Newest created or newest changed first"),
+    sort: str = Query(
+        default="created", pattern=r"^(created|updated|priority|points|due|title)$",
+        description="created: oldest first; updated: newest change first; priority: urgent first; "
+                    "points: easiest first; due: soonest first; title: A to Z. `order` flips it.",
+    ),
+    order: str | None = Query(default=None, pattern=r"^(asc|desc)$",
+                              description="asc or desc; leave out for each sort's natural direction"),
     limit: int = Query(default=500, ge=1, le=1000, description="Used only when neither page nor page_size is sent"),
     lane: str | None = Query(default=None, pattern=r"^(planned|backlog)$",
                              description="planned = to_do, backlog = backlog"),
@@ -841,9 +847,9 @@ def list_tasks(
         ))
 
     # The id breaks ties, so two pages never share a row.
-    order = (Task.updated_at.desc(), Task.id.desc()) if sort == "updated" else (Task.created_at.desc(), Task.id.desc())
+    ordering = _ordering(sort, order)
     rows_stmt = stmt.options(selectinload(Task.criteria), selectinload(Task.comments),
-                             selectinload(Task.children), selectinload(Task.incoming_links)).order_by(*order)
+                             selectinload(Task.children), selectinload(Task.incoming_links)).order_by(*ordering)
 
     if tag or ready or claimable:
         # Tags are a JSON list, blockers follow links and the claim rules need the
@@ -855,7 +861,8 @@ def list_tasks(
             and (not (ready or claimable) or not (t.claim_is_live(now) and t.claimed_by == user.id))
         ]
         if ready:
-            matched.sort(key=lambda t: (t.status is not S.to_do, PRIORITY_RANK.get(t.priority.value, 9), t.created_at, t.id))
+            # Planned work first; inside each lane the chosen sort (stable sort keeps SQL order).
+            matched.sort(key=lambda t: t.status is not S.to_do)
         if paging.on:
             tasks = paging.slice(matched, response, X_Total_Points=sum(t.points or 0 for t in matched))
         else:
@@ -885,6 +892,30 @@ def list_tasks(
                 if c.kind is CommentKind.question and c.resolved_at is None and c.to_user_id in asked_ids
             ]
     return rows
+
+
+# Each sort's natural direction: True means ascending.
+NATURAL_ASC = {"created": True, "updated": False, "priority": True, "points": True, "due": True, "title": True}
+
+
+def _ordering(sort: str, order: str | None):
+    """ORDER BY for the task list. Ties fall back to oldest first, then id, so
+    two pages never share a row."""
+    asc = NATURAL_ASC[sort] if order is None else order == "asc"
+    if sort == "priority":
+        rank = case({"urgent": 0, "high": 1, "medium": 2, "low": 3}, value=Task.priority, else_=9)
+        keys = [rank.asc() if asc else rank.desc()]
+    elif sort == "due":
+        # Tasks with no due date go last either way.
+        keys = [Task.due_date.is_(None), Task.due_date.asc() if asc else Task.due_date.desc()]
+    else:
+        col = {"created": Task.created_at, "updated": Task.updated_at, "points": Task.points,
+               "title": func.lower(Task.title)}[sort]
+        keys = [col.asc() if asc else col.desc()]
+    if sort != "created":
+        keys.append(Task.created_at.asc())
+    keys.append(Task.id.asc() if (asc or sort != "created") else Task.id.desc())
+    return keys
 
 
 def _comma(value: str | None, enum_cls, what: str) -> list:

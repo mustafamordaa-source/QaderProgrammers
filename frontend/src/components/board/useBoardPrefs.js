@@ -120,12 +120,20 @@ export const EMPTY_FILTERS = {
   status: [],
   priority: [],
   kind: [],
+  // Oldest first by default, so open work gets finished before new work starts.
+  sort: 'created',
+  order: '',
 }
 
 const FLAGS = ['mine', 'ready', 'decision', 'agents']
 const TEXTS = ['q', 'tag', 'side', 'area']
 const LISTS = { status: STATUSES, priority: PRIORITIES, kind: TASK_KINDS }
-const ONE_OF = { lane: ['planned', 'backlog'], subtasks: ['all', 'top', 'only'] }
+const ONE_OF = {
+  lane: ['planned', 'backlog'],
+  subtasks: ['all', 'top', 'only'],
+  sort: ['created', 'updated', 'priority', 'points', 'due', 'title'],
+  order: ['', 'asc', 'desc'],
+}
 // Other spellings people may have in old links.
 const ALIASES = { status: 'statuses', kind: 'kinds', decision: 'awaiting_decision' }
 const FILTER_KEYS = [...FLAGS, ...TEXTS, ...Object.keys(LISTS), ...Object.keys(ONE_OF), ...Object.values(ALIASES)]
@@ -173,7 +181,7 @@ function writeBoardFilters(params, filters) {
 
 /** True when any filter differs from the empty board. */
 export function hasFilters(filters) {
-  return Object.keys(EMPTY_FILTERS).some((key) =>
+  return Object.keys(EMPTY_FILTERS).filter((key) => key !== 'sort' && key !== 'order').some((key) =>
     Array.isArray(EMPTY_FILTERS[key]) ? filters[key].length > 0 : filters[key] !== EMPTY_FILTERS[key],
   )
 }

@@ -63,7 +63,11 @@ class TestClaimFromBacklog:
             client, h, _item("QX-4", side="be", priority="low"), _item("QX-5", side="be", priority="urgent"),
             _item("QX-6", side="be", priority="low", status="to_do"),
         )
+        # Planned first, then the backlog oldest first (the default sort).
         rows = client.get("/tasks?ready=true", headers=auth(alice)).json()
+        assert [r["id"] for r in rows] == [planned, low, urgent]
+        # Urgent first inside each lane when asked.
+        rows = client.get("/tasks?ready=true&sort=priority", headers=auth(alice)).json()
         assert [r["id"] for r in rows] == [planned, urgent, low]
         assert [r["lane"] for r in rows] == ["planned", "backlog", "backlog"]
         only_planned = client.get("/tasks?ready=true&lane=planned", headers=auth(alice)).json()
@@ -394,3 +398,26 @@ class TestMemberAssign:
         client.patch(f"/tasks/{secret}/assign", headers=h, json={"assignee_1_id": alice.id})
         r = client.patch(f"/tasks/{secret}/assign", headers=auth(alice), json={"assignee_1_id": bob.id})
         assert r.status_code == 403 and "Restricted" in r.json()["detail"]
+
+
+class TestSorting:
+    def test_each_sort_and_its_natural_direction(self, client, auth, leader, db_session):
+        h = auth(leader)
+        a, b, c = _import(client, h, _item("QX-80", priority="low", points=8),
+                          _item("QX-81", priority="urgent", points=2), _item("QX-82", priority="medium", points=5))
+        ids = lambda q: [r["id"] for r in client.get(f"/tasks?{q}", headers=h).json()]  # noqa: E731
+        assert ids("") == [a, b, c]  # oldest first by default
+        assert ids("order=desc") == [c, b, a]
+        assert ids("sort=priority") == [b, c, a]  # urgent first
+        assert ids("sort=priority&order=desc") == [a, c, b]
+        assert ids("sort=points") == [b, c, a]  # easiest first
+        assert ids("sort=title") == [a, b, c]
+        assert client.get("/tasks?sort=size", headers=h).status_code == 422
+
+    def test_paged_sort_never_repeats_a_row(self, client, auth, leader):
+        h = auth(leader)
+        _import(client, h, *[_item(f"QX-9{i}", priority="high") for i in range(5)])
+        seen = []
+        for page in (1, 2, 3):
+            seen += [r["id"] for r in client.get(f"/tasks?sort=priority&page={page}&page_size=2", headers=h).json()]
+        assert len(seen) == len(set(seen)) == 5
