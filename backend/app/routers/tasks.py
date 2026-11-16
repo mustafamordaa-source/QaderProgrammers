@@ -1476,8 +1476,8 @@ def split_task(
             ),
             priority=parent.priority,
             points=part.points or parent.points,
-            # A backlog parent splits into backlog parts; anything else into planned parts.
-            status=S.backlog if parent.status is S.backlog else S.to_do,
+            # Parts start planned only when the parent is planned or under way; otherwise in the backlog.
+            status=S.to_do if parent.status in (S.to_do, S.in_progress, S.in_review) else S.backlog,
             due_date=parent.due_date,
             created_by=user.id,
             assignee_1_id=part.assignee_id,
