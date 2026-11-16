@@ -498,6 +498,8 @@ class TaskOut(ORMModel):
     claimable: bool = False
     claim_block: str | None = None
     claim_block_text: str | None = None
+    # For the caller: may they set who works on it (leads always; members on open or own tasks).
+    can_assign: bool = False
     # planned = to_do, backlog = backlog; null for other statuses.
     lane: str | None = None
     # Everyone on the task, including people working through its subtasks.

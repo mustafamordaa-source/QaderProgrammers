@@ -363,3 +363,34 @@ class TestIdleClaims:
     def test_claim_kinds_are_not_a_setting(self, client, auth, alice):
         r = client.get("/notifications/preferences", headers=auth(alice))
         assert r.status_code == 200 and "claim_idle" not in str(r.json())
+
+
+class TestMemberAssign:
+    def test_open_task_can_be_handed_to_a_teammate(self, client, auth, leader, alice, bob, db_session):
+        from app.models import Notification
+
+        _member(alice, db_session, ("fe",))
+        [tid] = _import(client, auth(leader), _item("QX-70", side="be"))
+        row = client.get(f"/tasks/{tid}", headers=auth(alice)).json()
+        assert row["can_assign"] is True
+        r = client.patch(f"/tasks/{tid}/assign", headers=auth(alice), json={"assignee_1_id": bob.id})
+        assert r.status_code == 200 and r.json()["assignee_1_id"] == bob.id
+        assert db_session.query(Notification).filter_by(user_id=bob.id, kind="assigned").count() == 1
+        # Now it is Bob's: Alice can no longer reassign it.
+        assert client.get(f"/tasks/{tid}", headers=auth(alice)).json()["can_assign"] is False
+
+    def test_handing_over_ends_the_old_claim(self, client, auth, leader, alice, bob, db_session):
+        _member(alice, db_session)
+        [tid] = _import(client, auth(leader), _item("QX-71", side="be"))
+        client.post(f"/tasks/{tid}/claim", headers=auth(alice), json={})
+        r = client.patch(f"/tasks/{tid}/assign", headers=auth(alice), json={"assignee_1_id": bob.id})
+        assert r.status_code == 200 and r.json()["claimed_by"] is None
+
+    def test_restricted_and_lead_assigns_stay_with_leads(self, client, auth, leader, alice, bob, db_session):
+        h = auth(leader)
+        [kept, secret] = _import(client, h, _item("QX-72", assign_only=True), _item("QX-73", restricted=True))
+        r = client.patch(f"/tasks/{kept}/assign", headers=auth(alice), json={"assignee_1_id": bob.id})
+        assert r.status_code == 403 and "Lead assigns" in r.json()["detail"]
+        client.patch(f"/tasks/{secret}/assign", headers=h, json={"assignee_1_id": alice.id})
+        r = client.patch(f"/tasks/{secret}/assign", headers=auth(alice), json={"assignee_1_id": bob.id})
+        assert r.status_code == 403 and "Restricted" in r.json()["detail"]

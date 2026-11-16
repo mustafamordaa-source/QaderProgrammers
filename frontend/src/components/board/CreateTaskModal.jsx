@@ -1,3 +1,4 @@
+import WithPreview from '../MarkdownPreview'
 import { useEffect, useRef, useState } from 'react'
 import Modal from '../Modal'
 import { api } from '../../api/client'
@@ -175,6 +176,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
       })
     } else {
       payload.status = 'backlog'
+      if (form.assignee_1_id) payload.assignee_1_id = Number(form.assignee_1_id)
     }
     try {
       await onCreate(payload)
@@ -198,7 +200,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
       <form onSubmit={handleSubmit}>
         {!isLead && (
           <p className="mb-4 rounded-lg border border-hairline bg-surface-raised px-3 py-2 text-sm text-ink-secondary">
-            Your task goes to the backlog. A lead triages it, assigns it and plans it.
+            Your task goes to the backlog. Leave it open for anyone on its side, or hand it to a teammate below.
           </p>
         )}
 
@@ -249,6 +251,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
         <label className="mt-4 block text-sm font-medium" htmlFor="description">
           Description
         </label>
+        <WithPreview value={form.description}>
         <textarea
           id="description"
           rows={template?.skeleton ? 8 : 4}
@@ -265,6 +268,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
             descriptionError ? 'border-critical' : ''
           }`}
         />
+        </WithPreview>
         {askReplace && templates?.[askReplace] && (
           <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg border border-warning/50 px-3 py-2 text-xs text-ink-secondary">
             <span className="flex-1">
@@ -473,6 +477,28 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
         <div className="mt-4">
           <PointsPicker value={form.points} onChange={(points) => update('points', points)} />
         </div>
+
+        {!isLead && (
+          <div className="mt-4">
+            <label className="block text-sm font-medium" htmlFor="member-assignee">
+              Assign to <span className="font-normal text-ink-muted">(optional)</span>
+            </label>
+            <select
+              id="member-assignee"
+              value={form.assignee_1_id}
+              onChange={(event) => update('assignee_1_id', event.target.value)}
+              className={inputClass}
+            >
+              <option value="">Nobody: anyone on its side can take it</option>
+              {programmers.map((person) => (
+                <option key={person.id} value={person.id}>
+                  {person.name}
+                  {person.sides?.length ? ` (${person.sides.join(', ')})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {isLead && (
           <>

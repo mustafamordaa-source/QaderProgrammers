@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { RichText } from '../../MarkdownPreview'
 import { api } from '../../../api/client'
 import { ActorBadge, PlainText, StatusBadge } from '../../Badges'
 import { CRITERION_LABELS, taskKey } from '../../../lib/constants'
@@ -131,7 +132,7 @@ function CriterionRow({ ctx, criterion }) {
         {criterion.evidence && (
           <div className="mt-2 rounded-md border border-hairline bg-surface-raised px-2.5 py-1.5">
             <span className="text-[11px] font-medium uppercase tracking-wide text-ink-muted">Evidence</span>
-            <PlainText className="text-[13px] text-ink-secondary">{criterion.evidence}</PlainText>
+            <RichText className="text-[13px] text-ink-secondary">{criterion.evidence}</RichText>
           </div>
         )}
         {criterion.checked_at && (

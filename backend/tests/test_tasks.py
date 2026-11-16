@@ -50,11 +50,11 @@ class TestCreation:
         assert response.status_code == 201
         assert response.json()["status"] == "backlog"
 
-    def test_members_cannot_assign_what_they_create(self, client, auth, alice, bob):
+    def test_members_may_assign_what_they_create(self, client, auth, alice, bob):
         response = client.post(
             "/tasks", headers=auth(alice), json={"title": "x", "assignee_1_id": bob.id}
         )
-        assert response.status_code == 403
+        assert response.status_code == 201 and response.json()["assignee_1_id"] == bob.id
 
     def test_rejects_the_same_assignee_twice(self, client, auth, leader, alice):
         response = client.post(
@@ -297,12 +297,19 @@ class TestAssignment:
         assert client.get("/tasks?mine=true", headers=auth(alice)).json() == []
         assert len(client.get("/tasks?mine=true", headers=auth(bob)).json()) == 1
 
-    def test_programmers_cannot_reassign(self, client, auth, alice, bob, make_task):
+    def test_members_hand_over_their_own_task(self, client, auth, alice, bob, make_task):
         task = make_task(assignee_1=alice)
         response = client.patch(
             f"/tasks/{task.id}/assign", headers=auth(alice), json={"assignee_1_id": bob.id}
         )
-        assert response.status_code == 403
+        assert response.status_code == 200 and response.json()["assignee_1_id"] == bob.id
+
+    def test_members_cannot_take_over_someone_elses_task(self, client, auth, alice, bob, carol, make_task):
+        task = make_task(assignee_1=alice)
+        response = client.patch(
+            f"/tasks/{task.id}/assign", headers=auth(bob), json={"assignee_1_id": carol.id}
+        )
+        assert response.status_code == 403 and "Someone else is assigned" in response.json()["detail"]
 
 
 class TestPoints:

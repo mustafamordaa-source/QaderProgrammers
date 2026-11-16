@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import WithPreview, { RichText } from '../../MarkdownPreview'
 import { api } from '../../../api/client'
 import { ActorBadge, DeployBadge, PlainText, TagBadge } from '../../Badges'
 import AreaPicker from '../AreaPicker'
@@ -159,6 +160,7 @@ function EditForm({ ctx, programmers, onDone }) {
 
       <div>
         <label className="block text-sm font-medium" htmlFor="edit-summary">Summary</label>
+        <WithPreview value={form.summary}>
         <textarea
           id="edit-summary"
           rows={3}
@@ -168,6 +170,7 @@ function EditForm({ ctx, programmers, onDone }) {
           onChange={(e) => update('summary', e.target.value)}
           className={inputClass}
         />
+        </WithPreview>
         <p className="mt-1 text-xs text-ink-muted">
           A short current state. A hand-back replaces it with its Summary line.
         </p>
@@ -176,6 +179,7 @@ function EditForm({ ctx, programmers, onDone }) {
       {isLead && (
         <div>
           <label className="block text-sm font-medium" htmlFor="edit-description">Description</label>
+          <WithPreview value={form.description}>
           <textarea
             id="edit-description"
             rows={5}
@@ -184,6 +188,7 @@ function EditForm({ ctx, programmers, onDone }) {
             onChange={(e) => update('description', e.target.value)}
             className={inputClass}
           />
+          </WithPreview>
         </div>
       )}
 
@@ -556,6 +561,43 @@ function ClaimPanel({ ctx }) {
   )
 }
 
+/** Jira-style hand-over: pick a teammate (or yourself) for a task you may assign. */
+function AssignControl({ ctx, programmers }) {
+  const { task, user, run, busy } = ctx
+  const [who, setWho] = useState('')
+  if (!task.can_assign) return null
+  const choices = programmers.filter((p) => p.id !== task.assignee_1_id)
+
+  async function assign() {
+    if (!who) return
+    // run() shows any refusal in the task's error banner.
+    const ok = await run(() => api.assign(task.id, Number(who), null), { reloadAfter: true })
+    if (ok) setWho('')
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <select
+        aria-label="Assign to"
+        className="min-w-0 flex-1 rounded-lg border border-hairline bg-surface-raised px-2 py-1 text-xs"
+        value={who}
+        onChange={(e) => setWho(e.target.value)}
+      >
+        <option value="">Assign to…</option>
+        {choices.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.id === user?.id ? 'Me' : p.name}
+            {p.sides?.length ? ` (${p.sides.join(', ')})` : ''}
+          </option>
+        ))}
+      </select>
+      <button type="button" disabled={!who || busy} onClick={assign} className={secondaryButton}>
+        Assign
+      </button>
+    </div>
+  )
+}
+
 export default function OverviewTab({ ctx }) {
   const { task, people, isLead, isWorker, isReadOnly, closed, openTask } = ctx
   const [editing, setEditing] = useState(false)
@@ -572,14 +614,14 @@ export default function OverviewTab({ ctx }) {
         {task.drop_reason && (
           <div className="rounded-lg border border-hairline bg-surface-raised p-3">
             <h4 className={sectionTitle}>Drop reason</h4>
-            <PlainText className="mt-1 text-sm text-ink-secondary">{task.drop_reason}</PlainText>
+            <RichText className="mt-1 text-ink-secondary">{task.drop_reason}</RichText>
           </div>
         )}
 
         <div>
           <h4 className={sectionTitle}>Summary</h4>
           {task.summary ? (
-            <PlainText className="mt-1 text-sm leading-relaxed">{task.summary}</PlainText>
+            <RichText className="mt-1 leading-relaxed">{task.summary}</RichText>
           ) : (
             <p className="mt-1 text-sm text-ink-muted">No summary yet.</p>
           )}
@@ -588,7 +630,7 @@ export default function OverviewTab({ ctx }) {
         <div>
           <h4 className={sectionTitle}>Description</h4>
           {task.description ? (
-            <PlainText className="mt-1 text-sm leading-relaxed text-ink-secondary">{task.description}</PlainText>
+            <RichText className="mt-1 leading-relaxed text-ink-secondary">{task.description}</RichText>
           ) : (
             <p className="mt-1 text-sm text-ink-muted">No description.</p>
           )}
@@ -644,6 +686,7 @@ export default function OverviewTab({ ctx }) {
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 lg:grid-cols-1">
           <Field label="Assigned to">
             {assignees.length ? assignees.map(personName).join(' + ') : task.assign_only ? 'Waits for a lead to assign' : 'Open: anyone on its side can take it'}
+            {!isReadOnly && !closed && <AssignControl ctx={ctx} programmers={programmers} />}
           </Field>
           {Array.isArray(task.people) && (
             <div className="col-span-2 lg:col-span-1">

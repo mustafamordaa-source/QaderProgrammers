@@ -199,6 +199,15 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   `proposed`, `closed`, `viewer`) and `claim_block_text` (one sentence). A refused claim
   answers 403 or 409 with that sentence in `detail` and the code in the
   `X-Claim-Block` header.
+- **Assign like Jira**: `PATCH /tasks/{id}/assign` is open to members for an
+  open task or one they work on (assignee or claim holder), so a frontend
+  developer can hand the backend half to a backend developer. Restricted and
+  Lead-assigns tasks stay with the leads. Handing over ends the old holder's
+  claim, and the new assignee is notified. Members may also pick an assignee
+  when they create a task. Each row says `can_assign` for the caller.
+- **Markdown**: descriptions, summaries, comments and evidence render as
+  Markdown (the same safe renderer as documents: no HTML, no images), and
+  the text boxes have a Preview tab.
 - **Take one part**: `POST /tasks/{id}/criteria/{n}/take` turns acceptance
   criterion `n` into a subtask on the parent's side, links the part to it and
   claims it for you. One person per part, many people per task. When the
