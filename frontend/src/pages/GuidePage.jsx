@@ -359,7 +359,7 @@ const SECTIONS = [
           ['Blocked by another task', 'Another open task blocks this one. Finish or take that one first.'],
           ['Someone holds the claim', 'Pick another task or ask them on the task. A claim is freed after 48 hours without activity.'],
           ['Others work on its parts', 'People hold some of its parts. Take a free part in the Criteria tab instead of the whole task.'],
-          ['Another side', 'Open work for a side outside your Works on. Ask a lead to add the side to your profile.'],
+          ['Another side', 'Open work for a side outside your Works on. Ask a lead to add the side to your profile, or, for a simple change you can test, press Take across sides and give a reason (see Working across sides).'],
           ['Lead assigns', 'Sensitive work a lead gives to a chosen person. Ask a lead if you think it should be you.'],
           ['Assigned to someone else', 'Someone else is assigned. Ask them to hand it over (Assign to… on the task), or ask a lead.'],
           ['In review, proposed or closed', 'Nothing to claim: it waits for review or triage, or it is finished.'],
@@ -406,13 +406,13 @@ const SECTIONS = [
         type: 'p',
         text: 'When a task needs several roles, split it into one part per side: fe, be, content, and so on. Each part copies the priority, tags, areas and due date, and each part gets its own claim.',
       },
-      { type: 'code', text: "qhub split 12 --part be:sara --part fe --part content --order 'be>fe'" },
+      { type: 'code', text: "qhub split 12 --part be:sara --part fe --part content" },
       {
         type: 'list',
         items: [
           '`be:sara` assigns the backend part to @sara. A part without a handle is open to anyone on its side.',
           'Only people whose Works on includes that side, or a lead, can claim an open part. Find yours with `qhub ready --mine-sides`.',
-          'Put the backend first when the frontend needs the API: `--order \'be>fe\'`, quoted. The fe part stays blocked until the be part is done.',
+          'Backend and frontend halves never block each other: both start at once and agree the contract on the parent (see Working across sides). Add an order only when one part truly cannot start before the other.',
           'A member can split a task they work on into open parts. Only a lead assigns parts to people.',
           'The parent shows a roster: each part with its side, people, claim and status. The parent starts when the first part starts, and leads hear when every part is closed.',
         ],
@@ -429,6 +429,43 @@ const SECTIONS = [
       },
       { type: 'code', text: 'qhub link 14 --blocks 12\nqhub links 12\nqhub unlink 12 7' },
       { type: 'p', text: 'In the first line, HUB-12 waits on HUB-14. The hub refuses links that make a loop.' },
+    ],
+  },
+  {
+    id: 'cross-side',
+    title: 'Working across sides',
+    blocks: [
+      {
+        type: 'p',
+        text: 'A task that needs both sides is split into a backend half and a frontend half. The halves are related and never block each other, so both sides start at once.',
+      },
+      { type: 'h3', text: 'The contract' },
+      {
+        type: 'list',
+        items: [
+          'Whoever finishes their half first writes the contract on the parent task as a document: the Docs tab, or `qhub doc` from the CLI.',
+          'Backend writes the endpoints, fields and errors. Frontend writes the screens, their states and the data the UI needs.',
+          'Then @mention the other side in a comment on the parent so they know it’s there.',
+          'Need something from the other side? Ask in a comment with an @mention instead of waiting.',
+        ],
+      },
+      {
+        type: 'code',
+        text: 'qhub doc 12 new "API contract" --kind spec --file contract.md\nqhub comment 12 "@sara the contract is in the Docs tab"',
+      },
+      { type: 'h3', text: 'Taking the other side’s half' },
+      {
+        type: 'p',
+        text: 'If you’re free and the other side’s half is a simple, low-risk change you can test, you may take it. A card or part that shows the Another side lock offers Take across sides; press it and say why it’s safe for you, in 10 to 500 characters. The hub posts your reason as a note on the task and tells the people on it and on its parent.',
+      },
+      {
+        type: 'list',
+        items: [
+          'Take it only when you can run and test the change yourself.',
+          'Risky work stays with its side: migrations, security, payments, data changes and anything you can’t test.',
+          'Without a reason the side rule still refuses the claim.',
+        ],
+      },
     ],
   },
   {

@@ -520,6 +520,8 @@ class TaskOut(ORMModel):
     claim_block_text: str | None = None
     # For the caller: may they set who works on it (leads always; members on open or own tasks).
     can_assign: bool = False
+    # Only the side rule stops the caller: a cross_side_reason would let them claim it.
+    cross_side_ok: bool = False
     # planned = to_do, backlog = backlog; null for other statuses.
     lane: str | None = None
     # Everyone on the task, including people working through its subtasks.
@@ -540,6 +542,8 @@ class PersonOn(BaseModel):
 class TakePartRequest(BaseModel):
     ttl_hours: float | None = Field(default=None, gt=0)
     agent: str | None = Field(default=None, max_length=80)
+    # Lets a member take another side's task when it is a simple change they can test.
+    cross_side_reason: str | None = Field(default=None, min_length=10, max_length=500)
 
 
 class FacetsOut(BaseModel):
@@ -807,6 +811,8 @@ class ClaimRequest(BaseModel):
     # A browser user claiming for themselves may name the agent here; with an
     # API token the X-Agent header wins.
     agent: str | None = Field(default=None, max_length=80)
+    # Lets a member take another side's task when it is a simple change they can test.
+    cross_side_reason: str | None = Field(default=None, min_length=10, max_length=500)
 
 
 class CommentCreate(BaseModel):
@@ -882,6 +888,7 @@ class TaskBrief(BaseModel):
     links: list[str] = []
     truncated: bool
     audience: str | None = None
+    cross_side_ok: bool = False
     # For the caller: can they claim it, and if not, why (code + sentence).
     claimable: bool = False
     claim_block: str | None = None

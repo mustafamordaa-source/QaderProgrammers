@@ -201,7 +201,9 @@ export const api = {
       method: 'POST',
       body: { to_status: toStatus, comment },
     }),
-  claim: (id, payload) => request(`/tasks/${id}/claim`, { method: 'POST', body: payload }),
+  // payload: { branch?, agent?, ttl_hours?, cross_side_reason? }. A reason (10 to 500 characters)
+  // lets you claim the other side's work when the side rule is the only block (`cross_side_ok`).
+  claim: (id, payload = {}) => request(`/tasks/${id}/claim`, { method: 'POST', body: payload }),
   release: (id) => request(`/tasks/${id}/release`, { method: 'POST' }),
   setDeploy: (id, state, note) =>
     request(`/tasks/${id}/deploy`, { method: 'PATCH', body: { state, note: note || null } }),
@@ -214,7 +216,7 @@ export const api = {
   updateCriterion: (id, n, payload) =>
     request(`/tasks/${id}/criteria/${n}`, { method: 'PATCH', body: payload }),
   // Take one part: the server makes a subtask for criterion n and claims it for you.
-  // Answers the new subtask (with `warnings`). payload: { agent?, ttl_hours? }.
+  // Answers the new subtask (with `warnings`). payload: { agent?, ttl_hours?, cross_side_reason? }.
   takePart: (id, n, payload = {}) =>
     request(`/tasks/${id}/criteria/${n}/take`, { method: 'POST', body: payload }),
 
