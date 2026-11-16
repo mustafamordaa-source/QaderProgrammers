@@ -306,3 +306,24 @@ class TestDetailPrivacy:
         html = mailer.compose_html(alice, [row])
         for text in (subject, body, html):
             assert "Secret hole" not in text and f"HUB-{task.id}" in text
+
+
+def test_one_bad_row_does_not_stop_other_mail(client, auth, leader, alice, bob, make_task, handles, db_session, smtp_on, monkeypatch):
+    from datetime import timedelta
+
+    from app.models import utcnow
+
+    task = make_task(assignee_1=alice)
+    client.post(f"/tasks/{task.id}/comments", headers=auth(leader), json={"body": "@alice @bob hi"})
+    real = mailer.compose
+
+    def picky(user, rows):
+        if user.id == alice.id:
+            raise KeyError("unknown kind")
+        return real(user, rows)
+
+    monkeypatch.setattr(mailer, "compose", picky)
+    _send(db_session)
+    assert [m["to"] for m in smtp_on] == [bob.email]
+    db_session.expire_all()
+    assert _rows(db_session, alice)[-1].email_attempts == 1

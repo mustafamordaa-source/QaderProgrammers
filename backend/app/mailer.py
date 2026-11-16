@@ -214,10 +214,11 @@ def run_once(now=None, session_factory=None) -> int:
             rows = [n for n in rows if n not in hidden][:25]
             if not rows:
                 continue
-            subject, body = compose(user, rows)
             try:
+                # Building the email sits inside the guard too: one bad row must not stop everyone's mail.
+                subject, body = compose(user, rows)
                 send_message(user.notify_address or user.email, subject, body, compose_html(user, rows))
-            except Exception as exc:  # noqa: BLE001 - any SMTP failure is retried
+            except Exception as exc:  # noqa: BLE001 - any failure is retried, then marked failed
                 last_error = f"{type(exc).__name__}: {exc}"[:300]
                 log.warning("email to user %s failed: %s", user.id, last_error)
                 for n in rows:
