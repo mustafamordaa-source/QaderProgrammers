@@ -6,6 +6,7 @@ import AreaPicker from '../AreaPicker'
 import PointsPicker from '../PointsPicker'
 import TaskPicker from '../TaskPicker'
 import { LockIcon } from '../BoardIcons'
+import CrossSideTake, { crossSideOpen } from '../CrossSideTake'
 import {
   AUDIENCES,
   AUDIENCE_LABELS,
@@ -489,6 +490,25 @@ function ClaimPanel({ ctx }) {
         : null
   }
 
+  // Take across sides: the hub's refusal goes back to the dialog, which shows it.
+  async function claimAcross(crossSideReason) {
+    setMessage(null)
+    let result
+    try {
+      result = await api.claim(task.id, { branch: branch.trim() || null, cross_side_reason: crossSideReason })
+    } catch (err) {
+      await reload()
+      throw err
+    }
+    await reload()
+    setMessage({
+      tone: 'good',
+      text: result?.warnings?.length
+        ? `Taken across sides, with warnings:\n${result.warnings.map((w) => `• ${w}`).join('\n')}`
+        : 'Taken across sides. The hub posted your reason as a note and told the people on the task.',
+    })
+  }
+
   async function claim(event) {
     event.preventDefault()
     setMessage(null)
@@ -553,6 +573,11 @@ function ClaimPanel({ ctx }) {
           <LockIcon className="mt-0.5 h-3 w-3" />
           <span>{reason}</span>
         </p>
+      )}
+      {!claimable && !mine && !isReadOnly && crossSideOpen(task) && (
+        <div className="mt-2">
+          <CrossSideTake disabled={busy} onSubmit={claimAcross} />
+        </div>
       )}
       {claimable && !mine && (task.status === 'to_do' || task.status === 'backlog') && (
         <p className="mt-1.5 text-xs text-ink-muted">Taking it moves it to In progress and makes it yours.</p>

@@ -497,3 +497,49 @@ class TestSplitParts:
         kid = out.json()["children"][0]["id"]
         r = client.post(f"/tasks/{kid}/claim", headers=auth(alice), json={})
         assert r.status_code == 409 and r.headers["X-Claim-Block"] == "waiting_decision"
+
+
+class TestCrossSide:
+    def test_reason_lets_a_member_take_the_other_side(self, client, auth, leader, alice, bob, db_session):
+        from app.models import Comment, Notification
+
+        alice.sides = ["fe"]
+        bob.sides = ["be"]
+        db_session.commit()
+        h = auth(leader)
+        [tid] = _import(client, h, _item("QX-C1", criteria=["API", "UI"]))
+        kids = client.post(f"/tasks/{tid}/split", headers=h, json={"parts": [
+            {"side": "be", "parts_from": [1]}, {"side": "fe", "parts_from": [2]}]}).json()["children"]
+        be = next(k for k in kids if k["side"] == "be")
+        fe = next(k for k in kids if k["side"] == "fe")
+        client.post(f"/tasks/{fe['id']}/claim", headers=auth(alice), json={})
+        row = client.get(f"/tasks/{be['id']}", headers=auth(alice)).json()
+        assert row["claimable"] is False and row["claim_block"] == "other_side" and row["cross_side_ok"] is True
+        r = client.post(f"/tasks/{be['id']}/claim", headers=auth(alice), json={})
+        assert r.status_code == 403 and r.headers["X-Claim-Block"] == "other_side"
+        assert client.post(f"/tasks/{be['id']}/claim", headers=auth(alice),
+                           json={"cross_side_reason": "short"}).status_code == 422
+        r = client.post(f"/tasks/{be['id']}/claim", headers=auth(alice),
+                        json={"cross_side_reason": "One new field on the serializer; I ran the API tests"})
+        assert r.status_code == 200 and r.json()["claimed_by"] == alice.id
+        note = db_session.query(Comment).filter_by(task_id=be["id"]).one()
+        assert note.body.startswith("Cross-side claim by @") and "API tests" in note.body
+        # Alice holds the fe half herself, so nobody else is told here; a lead assignment would be.
+        assert client.get(f"/tasks/{be['id']}/brief", headers=auth(bob)).json()["cross_side_ok"] is False
+
+    def test_blocked_work_stays_blocked_with_a_reason(self, client, auth, leader, alice, db_session):
+        alice.sides = ["fe"]
+        db_session.commit()
+        h = auth(leader)
+        [tid] = _import(client, h, _item("QX-C2", side="be", question="Allowed?", question_to=str(leader.id)))
+        r = client.post(f"/tasks/{tid}/claim", headers=auth(alice),
+                        json={"cross_side_reason": "Tiny change and I can test it fully"})
+        assert r.status_code == 409 and r.headers["X-Claim-Block"] == "waiting_decision"
+
+
+def test_impact_puts_bugs_first(client, auth, leader, db_session):
+    h = auth(leader)
+    page, team_bug, student_bug = _import(
+        client, h, _item("QX-B1", kind="feature", audience="students"),
+        _item("QX-B2", kind="bug", audience="team"), _item("QX-B3", kind="bug", audience="students"))
+    assert [r["id"] for r in client.get("/tasks", headers=h).json()] == [student_bug, team_bug, page]

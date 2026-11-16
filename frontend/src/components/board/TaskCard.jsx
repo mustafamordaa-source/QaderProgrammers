@@ -42,6 +42,7 @@ import {
   SubtasksIcon,
 } from './BoardIcons'
 import { isMine } from './boardLayout'
+import CrossSideTake, { crossSideOpen } from './CrossSideTake'
 
 // The leading edge carries the priority; the badge or a screen-reader line
 // carries it in words, so colour is never the only signal.
@@ -320,7 +321,17 @@ export default function TaskCard({
       {claiming ? 'Taking…' : 'Take'}
     </button>
   ) : onClaim && !mine ? (
-    <ClaimBlock task={task} compact={compact} />
+    <>
+      <ClaimBlock task={task} compact={compact} />
+      {crossSideOpen(task) && (
+        <CrossSideTake
+          disabled={claiming}
+          label={compact ? 'Across sides' : 'Take across sides'}
+          onSubmit={(reason) => onClaim(task, { crossSideReason: reason })}
+          className={quickButton}
+        />
+      )}
+    </>
   ) : null
 
   const actions = (

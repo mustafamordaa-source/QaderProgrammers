@@ -210,7 +210,7 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   the text boxes have a Preview tab.
 - **Sorting**: `GET /tasks?sort=impact|created|updated|priority|points|due|title`
   with optional `order=asc|desc`. Each sort has a natural direction: impact
-  student-facing first (the default), created oldest first, updated newest first, priority urgent first,
+  bugs first, then student-facing first (the default), created oldest first, updated newest first, priority urgent first,
   points easiest first, due soonest first (no date last), title A to Z. Ties
   fall back to oldest first. `ready=true` keeps planned work above the
   backlog and sorts inside each lane.
@@ -225,6 +225,12 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   agent acts in one call (`qhub next`). Emails carry a status line, the full
   text, the reply context and an HTML part; on restricted tasks they carry
   only who, what and the task key.
+- **Across sides**: split halves never block each other; whoever finishes
+  first writes the contract as a document on the parent and @mentions the
+  other side. A member may claim or take another side's work when the side
+  rule is the only thing in the way, by sending `cross_side_reason` (10 to 500
+  characters): the hub posts it as a note and tells the people on the task
+  and its family. Rows say `cross_side_ok`.
 - **Take one part**: `POST /tasks/{id}/criteria/{n}/take` turns acceptance
   criterion `n` into a subtask on the parent's side, links the part to it and
   claims it for you. One person per part, many people per task. When the

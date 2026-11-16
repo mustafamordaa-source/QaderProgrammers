@@ -239,6 +239,7 @@ def _out(task: Task, model=TaskOut, user: User | None = None, **extra):
         row.claimable = code is None and not mine
         row.claim_block, row.claim_block_text = (None, None) if mine else (code, text)
         row.can_assign = user.is_lead or _assign_block(task, user) is None
+        row.cross_side_ok = code == "other_side" and _claim_block(task, user, now, ignore_side=True)[0] is None
     for key, value in extra.items():
         setattr(row, key, value)
     return row
@@ -290,7 +291,7 @@ def _handle(u: User) -> str:
     return u.handle or u.name
 
 
-def _claim_block(task: Task, user: User, now) -> tuple[str | None, str | None]:
+def _claim_block(task: Task, user: User, now, ignore_side: bool = False) -> tuple[str | None, str | None]:
     """Why `user` cannot claim `task` now, as (code, sentence); (None, None) when they can."""
     if user.is_read_only:
         return "viewer", "Viewer accounts are read-only"
@@ -311,7 +312,7 @@ def _claim_block(task: Task, user: User, now) -> tuple[str | None, str | None]:
             return "assign_only", "A lead assigns this one to a chosen person"
         if not task.open_to_side:
             return "not_pool", "Assigned to someone else: ask a lead before you take it"
-        if task.side is not None and user.sides and task.side.value not in user.sides:
+        if not ignore_side and task.side is not None and user.sides and task.side.value not in user.sides:
             sides = ", ".join(SIDE_LABELS.get(x, x) for x in user.sides)
             return "other_side", f"{SIDE_LABELS[task.side.value]} work; your profile lists {sides}"
     blockers = task.open_blockers()
@@ -351,7 +352,7 @@ def _part_holder(criterion: Criterion) -> Task | None:
     return sub
 
 
-def _take_block(task: Task, criterion: Criterion, user: User) -> str | None:
+def _take_block(task: Task, criterion: Criterion, user: User, ignore_side: bool = False) -> str | None:
     """Why `user` cannot take this part now; None when they can."""
     if user.is_read_only:
         return "Viewer accounts are read-only"
@@ -380,10 +381,29 @@ def _take_block(task: Task, criterion: Criterion, user: User) -> str | None:
         return "A lead assigns this one to a chosen person"
     if not task.open_to_side:
         return "Assigned to someone else: ask a lead before you take it"
-    if task.side is not None and user.sides and task.side.value not in user.sides:
+    if not ignore_side and task.side is not None and user.sides and task.side.value not in user.sides:
         sides = ", ".join(SIDE_LABELS.get(x, x) for x in user.sides)
         return f"{SIDE_LABELS[task.side.value]} work; your profile lists {sides}"
     return None
+
+
+def _cross_side_note(db: Session, auth: Auth, task: Task, reason: str) -> None:
+    """Record a cross-side claim on the task and tell the people on it and its family."""
+    user = auth.user
+    works = ", ".join(user.sides or []) or "no side set"
+    body = lint.clean(f"Cross-side claim by @{_handle(user)} (works on {works}): {reason.strip()}", field="reason")
+    comment = Comment(task_id=task.id, author_id=user.id, actor_kind=auth.kind, agent_name=auth.agent,
+                      kind=CommentKind.note, body=body, created_at=utcnow())
+    db.add(comment)
+    db.flush()
+    record(db, auth, task_id=task.id, event_type=EventType.commented, data={"comment": comment.id, "cross_side": True})
+    family = [task] + ([task.parent] if task.parent else []) + (list(task.parent.children) if task.parent else [])
+    ids: set[int] = set()
+    for t in family:
+        ids.update(t.assignee_ids)
+        if t.claimed_by and t.claim_is_live(utcnow()):
+            ids.add(t.claimed_by)
+    notify(db, auth, users=_people(db, ids), task=task, kind=NotifyKind.mention, text=body, comment_id=comment.id)
 
 
 def _people_on(task: Task) -> list[PersonOn]:
@@ -808,7 +828,7 @@ def list_tasks(
     ),
     sort: str = Query(
         default="impact", pattern=r"^(impact|created|updated|priority|points|due|title)$",
-        description="impact (default): students first, then teachers, parents, managers, admins, unset, team, "
+        description="impact (default): bugs first, then other work; inside each students first, then teachers, parents, managers, admins, unset, team, "
                     "oldest first inside each; created: oldest first; updated: newest change first; priority: urgent first; "
                     "points: easiest first; due: soonest first; title: A to Z. `order` flips it.",
     ),
@@ -910,7 +930,9 @@ def _ordering(sort: str, order: str | None):
     if sort == "impact":
         rank = case({"students": 0, "teachers": 1, "parents": 2, "managers": 3, "admins": 4, "team": 6},
                     value=Task.audience, else_=5)
-        return [rank.asc() if asc else rank.desc(), Task.created_at.asc(), Task.id.asc()]
+        # Bugs come first, then everything else (redesign and new work); audience order inside each.
+        bugs_first = case((Task.kind == TaskKind.bug, 0), else_=1)
+        return [bugs_first, rank.asc() if asc else rank.desc(), Task.created_at.asc(), Task.id.asc()]
     if sort == "priority":
         rank = case({"urgent": 0, "high": 1, "medium": 2, "low": 3}, value=Task.priority, else_=9)
         keys = [rank.asc() if asc else rank.desc()]
@@ -1704,6 +1726,7 @@ def brief(task_id: int, auth: AuthCtx, db: DbSession) -> TaskBrief:
         links=[link.label for link in _links_out(task)][:10],
         truncated=truncated,
         audience=task.audience,
+        cross_side_ok=code == "other_side" and _claim_block(task, auth.user, now, ignore_side=True)[0] is None,
         claimable=claimable,
         claim_block=code,
         claim_block_text=text,
@@ -2037,18 +2060,25 @@ def claim_task(
     _assert_visible(task, user)
     _assert_not_viewer(user)
 
-    _refuse_claim(task, user)
+    crossing = _refuse_claim(task, user, payload.cross_side_reason)
     out, warnings = _claim(db, auth, task, payload.agent, payload.ttl_hours, payload.branch)
+    if crossing:
+        _cross_side_note(db, auth, task, payload.cross_side_reason)
     db.commit()
     return _out(_get_task_or_404(db, task.id), ClaimOut, user, warnings=warnings)
 
 
-def _refuse_claim(task: Task, user: User) -> None:
+def _refuse_claim(task: Task, user: User, cross_side_reason: str | None = None) -> bool:
     """Raise with the reason when `user` may not claim `task`; a live claim of
-    someone else is left to the race-safe update in `_claim`."""
+    someone else is left to the race-safe update in `_claim`. Returns True when
+    the claim goes through only because of a cross-side reason."""
     code, text = _claim_block(task, user, utcnow())
+    crossing = False
+    if code == "other_side" and cross_side_reason:
+        code, text = _claim_block(task, user, utcnow(), ignore_side=True)
+        crossing = True
     if code is None or code == "claimed":
-        return
+        return crossing
     forbidden = {"viewer", "not_pool", "other_side", "assign_only"}
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN if code in forbidden else status.HTTP_409_CONFLICT,
@@ -2174,6 +2204,10 @@ def take_part(
     if criterion is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No part {n} on this task")
     reason = _take_block(parent, criterion, user)
+    crossing = False
+    if reason is not None and "your profile lists" in reason and payload.cross_side_reason:
+        reason = _take_block(parent, criterion, user, ignore_side=True)
+        crossing = reason is None
     if reason is not None:
         code = ("taken" if reason.startswith("Taken in") else "claimed" if "holds the whole task" in reason
                 else "waiting_decision" if "decision" in reason
@@ -2241,6 +2275,8 @@ def take_part(
     db.flush()
     db.refresh(child)
     _, warnings = _claim(db, auth, child, payload.agent, payload.ttl_hours, None)
+    if crossing:
+        _cross_side_note(db, auth, child, payload.cross_side_reason)
     db.commit()
     return _out(_get_task_or_404(db, child.id), ClaimOut, user, warnings=warnings)
 

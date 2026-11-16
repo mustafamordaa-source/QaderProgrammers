@@ -389,11 +389,15 @@ export default function BoardPage() {
   }
 
   // The card's quick Claim: a claim with no branch, like the detail panel's.
-  async function handleClaim(task) {
+  // With `crossSideReason` (Take across sides) a refusal goes back to the card's
+  // dialog instead of the page banner.
+  async function handleClaim(task, { crossSideReason = null } = {}) {
     setNotice(null)
     setClaimingId(task.id)
     try {
-      const result = await api.claim(task.id, { branch: null })
+      const payload = { branch: null }
+      if (crossSideReason) payload.cross_side_reason = crossSideReason
+      const result = await api.claim(task.id, payload)
       applyUpdate(result)
       setNotice(
         result?.warnings?.length
@@ -402,6 +406,7 @@ export default function BoardPage() {
       )
     } catch (err) {
       if (isVersionConflict(err)) await load()
+      if (crossSideReason) throw err
       setError(`Could not take ${taskKey(task.id)}: ${err.message}`)
     } finally {
       setClaimingId(null)

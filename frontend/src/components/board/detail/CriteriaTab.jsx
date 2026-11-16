@@ -5,6 +5,7 @@ import { ActorBadge, PlainText, StatusBadge } from '../../Badges'
 import { CRITERION_LABELS, taskKey } from '../../../lib/constants'
 import { formatDateTime } from '../../../lib/format'
 import { HandIcon, LockIcon, PartIcon } from '../BoardIcons'
+import CrossSideTake from '../CrossSideTake'
 import { linkButton, primaryButton, secondaryButton, smallInputClass } from './ui'
 
 const STATE_STYLES = {
@@ -93,6 +94,43 @@ function TakePart({ ctx, criterion }) {
   )
 }
 
+/** The side rule alone stops this part (the task allows a cross-side claim). */
+function crossSidePart(task, criterion) {
+  return task.cross_side_ok === true && /your profile lists/i.test(criterion.take_block_text ?? '')
+}
+
+/** A part blocked only by the side rule: take it across sides with a reason. */
+function TakePartAcross({ ctx, criterion }) {
+  const { task, busy, reload, onOtherChanged } = ctx
+  const [done, setDone] = useState(null)
+
+  async function take(crossSideReason) {
+    setDone(null)
+    let subtask
+    try {
+      subtask = await api.takePart(task.id, criterion.n, { cross_side_reason: crossSideReason })
+    } catch (err) {
+      await reload()
+      throw err
+    }
+    onOtherChanged?.(subtask)
+    await reload()
+    setDone(`You took part ${criterion.n} across sides as ${taskKey(subtask.id)}. The hub posted your reason as a note.`)
+  }
+
+  return (
+    <div className="mt-2">
+      {done ? (
+        <p role="status" dir="auto" className="text-xs text-good">
+          {done}
+        </p>
+      ) : (
+        <CrossSideTake disabled={busy} onSubmit={take} />
+      )}
+    </div>
+  )
+}
+
 function CriterionRow({ ctx, criterion }) {
   const { task, isWorker, isReadOnly, busy, run, openTask } = ctx
   // null, 'met' or 'dropped': which inline form is open.
@@ -152,6 +190,11 @@ function CriterionRow({ ctx, criterion }) {
             <span>{criterion.take_block_text}</span>
           </p>
         ) : null}
+        {!criterion.subtask &&
+          criterion.state === 'open' &&
+          !criterion.can_take &&
+          !isReadOnly &&
+          crossSidePart(task, criterion) && <TakePartAcross ctx={ctx} criterion={criterion} />}
 
         {canEdit && !mode && (
           <div className="mt-2 flex flex-wrap gap-3">
