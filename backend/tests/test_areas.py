@@ -165,3 +165,27 @@ class TestSimilar:
         assert r["area"]["slug"] == "payments" and r["area_auto"] is True
         r = client.post("/tasks", headers=h, json={"title": "Dark mode toggle"}).json()
         assert r["area"] is None and r["area_auto"] is False
+
+
+def test_tree_totals_and_rollup(client, auth, leader, alice, db_session):
+    h = auth(leader)
+    client.post("/areas", headers=h, json={"name": "Platform design", "confirm_new": True})
+    client.post("/areas", headers=h, json={"name": "Redesign exams", "parent": "platform-design", "confirm_new": True})
+    client.post("/areas", headers=h, json={"name": "Redesign teachers", "parent": "platform-design", "confirm_new": True})
+    for area, title in (("redesign-exams", "Score screen layout"), ("redesign-exams", "Timer bar on phones"),
+                        ("redesign-teachers", "Class roster table")):
+        assert client.post("/tasks", headers=h, json={"title": title, "area": area}).status_code == 201
+    flat = {a["slug"]: a for a in client.get("/areas", headers=h).json()}
+    top = flat["platform-design"]
+    assert top["depth"] == 0 and top["children_count"] == 2 and top["open_count"] == 0
+    assert top["subtree_open"] == 3 and top["subtree_total"] == 3
+    kid = flat["redesign-exams"]
+    assert kid["depth"] == 1 and kid["path"] == ["Platform design", "Redesign exams"] and kid["parent_name"] == "Platform design"
+    tree = client.get("/areas?tree=true&sort=open", headers=h).json()
+    node = next(a for a in tree if a["slug"] == "platform-design")
+    assert [s["slug"] for s in node["subareas"]] == ["redesign-exams", "redesign-teachers"]
+    assert all(a["depth"] == 0 for a in tree)
+    assert all(a["parent"] is None for a in client.get("/areas?top=true", headers=h).json())
+    f = client.get("/tasks/facets", headers=h).json()
+    assert f["area_tree"]["platform-design"] == 3 and f["area_tree"]["redesign-exams"] == 2
+    assert f["area"].get("platform-design") is None

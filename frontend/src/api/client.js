@@ -125,6 +125,10 @@ function page(path, params, pageNumber = 1, pageSize = PAGE_SIZE) {
   return request(path, { params: { ...params, page: pageNumber, page_size: pageSize }, as: 'page' })
 }
 
+function areaParams({ tree, sort, top } = {}) {
+  return { tree: tree ? 'true' : undefined, top: top ? 'true' : undefined, sort: sort || undefined }
+}
+
 /** True when the server refused a write because the task changed meanwhile. */
 export function isVersionConflict(err) {
   return err instanceof ApiError && err.status === 409 && /changed since you read it/i.test(err.message)
@@ -173,8 +177,13 @@ export const api = {
 
   // Product areas: an open list; adding a name close to an existing one is refused
   // (409, err.detail.suggestions) unless confirm_new is true.
-  areas: (q) => request('/areas', { params: { q } }),
-  areasPage: (q, pageNumber, pageSize) => page('/areas', { q }, pageNumber, pageSize),
+  // opts: { tree, sort: 'name' | 'open', top }. `tree` answers the top-level areas with their
+  // sub-areas nested in `subareas`; `top` answers top-level areas only, flat; `sort: 'open'`
+  // puts the most open work (area plus sub-areas) first. A search (q) always answers flat.
+  areas: (q, opts = {}) => request('/areas', { params: { q, ...areaParams(opts) } }),
+  areasPage: (q, pageNumber, pageSize, opts = {}) =>
+    page('/areas', { q, ...areaParams(opts) }, pageNumber, pageSize),
+  areaTree: (sort = 'name') => request('/areas', { params: { tree: true, sort } }),
   createArea: (payload) => request('/areas', { method: 'POST', body: payload }),
   updateArea: (slug, payload) => request(`/areas/${encodeURIComponent(slug)}`, { method: 'PATCH', body: payload }),
   mergeArea: (slug, into) =>

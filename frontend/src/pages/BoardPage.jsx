@@ -479,32 +479,14 @@ export default function BoardPage() {
   const boardHeight = useFillHeight(boardRef)
 
   const dismiss = 'ms-auto shrink-0 rounded px-1 text-xs opacity-70 hover:opacity-100'
+  const pageAbout = isLead
+    ? 'Every task across the team. Leads triage, approve and drop work.'
+    : isReadOnly
+      ? 'Read-only view of the team’s work.'
+      : 'The team’s work. You can move tasks assigned to you and open tasks you claimed.'
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-xl font-semibold tracking-tight">Team board</h1>
-          <p className="mt-0.5 hidden text-sm text-ink-secondary sm:block">
-            {isLead
-              ? 'Every task across the team. Leads triage, approve and drop work.'
-              : isReadOnly
-                ? 'Read-only view of the team’s work.'
-                : 'The team’s work. You can move tasks assigned to you and open tasks you claimed.'}
-          </p>
-        </div>
-
-        {!isReadOnly && (
-          <button
-            type="button"
-            onClick={() => setCreating(true)}
-            className="rounded-lg bg-series1 px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
-          >
-            Create task
-          </button>
-        )}
-      </div>
-
+    <div className="flex flex-col gap-2">
       <BoardFilters
         filters={filters}
         update={updateFilters}
@@ -520,10 +502,33 @@ export default function BoardPage() {
         onGroupBy={prefs.setGroupBy}
         density={prefs.density}
         onDensity={prefs.setDensity}
+        isMobile={isMobile}
+        filtersSeen={prefs.filtersSeen}
+        onFiltersSeen={prefs.markFiltersSeen}
+        title={
+          <h1
+            title={pageAbout}
+            className="sr-only text-base font-semibold tracking-tight sm:not-sr-only sm:me-1 sm:whitespace-nowrap"
+          >
+            Team board
+          </h1>
+        }
+        action={
+          !isReadOnly && (
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              className="h-8 whitespace-nowrap rounded-lg bg-series1 px-3 text-sm font-medium text-white transition hover:opacity-90"
+            >
+              <span aria-hidden="true" className="sm:hidden">+ New</span>
+              <span className="sr-only sm:not-sr-only">Create task</span>
+            </button>
+          )
+        }
       />
 
       {error && (
-        <p role="alert" dir="auto" className="flex items-start gap-2 rounded-lg border border-critical/40 px-3 py-2 text-sm text-critical">
+        <p role="alert" dir="auto" className="flex items-start gap-2 rounded-lg border border-critical/40 px-3 py-1.5 text-sm text-critical">
           <span>{error}</span>
           <button type="button" onClick={() => setError(null)} aria-label="Dismiss message" className={dismiss}>
             ✕
@@ -531,7 +536,7 @@ export default function BoardPage() {
         </p>
       )}
       {notice && (
-        <p role="status" dir="auto" className="flex items-start gap-2 rounded-lg border border-good/40 px-3 py-2 text-sm text-good">
+        <p role="status" dir="auto" className="flex items-start gap-2 rounded-lg border border-good/40 px-3 py-1.5 text-sm text-good">
           <span>{notice}</span>
           <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss message" className={dismiss}>
             ✕

@@ -368,6 +368,16 @@ class AreaOut(AreaBrief):
     created_at: datetime
     open_count: int = 0
     total_count: int = 0
+    # The tree: where this area sits and what is under it. Counts below include sub-areas.
+    parent_name: str | None = None
+    depth: int = 0
+    path: list[str] = []
+    children: list[str] = []
+    children_count: int = 0
+    subtree_open: int = 0
+    subtree_total: int = 0
+    # Filled with ?tree=true: the sub-areas, nested.
+    subareas: list["AreaOut"] = []
 
 
 def _clean_aliases(v):
@@ -557,6 +567,8 @@ class FacetsOut(BaseModel):
     claimable: int
     subtasks: int
     audience: dict[str, int] = {}
+    # Per area: matching tasks in it or any area below it.
+    area_tree: dict[str, int] = {}
 
 
 class TaskDetailOut(TaskOut):
@@ -888,6 +900,8 @@ class TaskBrief(BaseModel):
     links: list[str] = []
     truncated: bool
     audience: str | None = None
+    # The product area's slug (its path is in GET /areas).
+    area: str | None = None
     cross_side_ok: bool = False
     # For the caller: can they claim it, and if not, why (code + sentence).
     claimable: bool = False
@@ -1115,3 +1129,4 @@ TaskDetailOut.model_rebuild()
 ClaimOut.model_rebuild()
 CriterionOut.model_rebuild()
 TaskOut.model_rebuild()
+AreaOut.model_rebuild()
