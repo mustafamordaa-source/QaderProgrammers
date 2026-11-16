@@ -191,7 +191,7 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
   `assign_only` ("Lead assigns") for sensitive work: nobody claims it or takes
   its parts until a lead assigns a person (`claim_block: assign_only`).
 - **Free to take** (`GET /tasks?ready=true`): what you can claim now, planned
-  (`to_do`) first, then backlog, each by priority, then oldest first. Each row
+  (`to_do`) first, then backlog, each in the chosen sort (default Impact). Each row
   carries `lane` (`planned` or `backlog`); `lane=planned` keeps only the plan.
 - **Why not**: every task row (list, detail, brief) tells the caller
   `claimable`, plus `claim_block` (a code: `waiting_decision`, `other_side`,
