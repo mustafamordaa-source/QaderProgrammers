@@ -92,8 +92,8 @@ def _slugify(title: str) -> str:
 
 def _assert_can_write_docs(task: Task, auth: Auth) -> None:
     _assert_visible(task, auth.user)
-    if auth.user.is_bot:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bots cannot write documents")
+    if auth.user.is_plain_bot:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bots that only propose cannot write documents")
     _assert_worker(task, auth.user)
 
 

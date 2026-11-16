@@ -251,10 +251,22 @@ export function isBot(user) {
   return user?.account_type === 'bot'
 }
 
-/** People a task can go to: active members. Bots propose work; the UI does
- *  not offer them as assignees. */
+/** A bot an admin lets work tasks like a member (`can_work`). */
+export function isWorkerBot(user) {
+  return isBot(user) && Boolean(user?.can_work)
+}
+
+/** People a task can go to: active members, plus bots that work tasks.
+ *  Propose-only bots are never offered. */
 export function assignablePeople(people) {
-  return (people ?? []).filter((p) => hasMemberRights(p) && p.is_active !== false && !isBot(p))
+  return (people ?? []).filter(
+    (p) => hasMemberRights(p) && p.is_active !== false && (!isBot(p) || isWorkerBot(p)),
+  )
+}
+
+/** Picker label: the name, with "(bot)" after a bot. */
+export function personLabel(person) {
+  return isBot(person) ? `${person.name} (bot)` : person.name
 }
 
 // Scopes an admin may give a bot token. Mirrors BOT_SCOPES in backend/app/deps.py.
@@ -262,6 +274,15 @@ export const BOT_SCOPES = {
   'tasks:read': 'Read the tasks it can see',
   'tasks:propose': 'File proposals for a lead to triage',
   'comments:write': 'Comment on its own proposals',
+}
+
+// The extra scopes a bot that works tasks may hold. Mirrors WORKER_BOT_SCOPES.
+export const WORKER_BOT_EXTRA_SCOPES = {
+  claims: 'Claim and release tasks, take parts',
+  'tasks:write': 'Move its tasks, edit criteria and evidence',
+  'tasks:create': 'File subtasks of work it holds (top-level tasks stay proposals)',
+  'git:write': 'Link branches, PRs and commits',
+  'docs:write': 'Write task documents, attach files, add context links',
 }
 
 export const COMMENT_KINDS = ['note', 'question', 'answer', 'decision', 'review', 'handback']

@@ -46,6 +46,10 @@ SCOPES: dict[str, str] = {
 DEFAULT_TOKEN_SCOPES: tuple[str, ...] = tuple(s for s in SCOPES if s != "tasks:propose")
 # The most a bot token may hold: read, propose, comment on its own proposals.
 BOT_SCOPES: tuple[str, ...] = ("tasks:read", "tasks:propose", "comments:write")
+# The most a bot with `can_work` may hold: the member scopes plus proposing.
+# `tasks:create` only lets it file subtasks of work it holds; its top-level
+# tasks stay proposals (see create_task).
+WORKER_BOT_SCOPES: tuple[str, ...] = tuple(SCOPES)
 
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _BAD_AGENT_NAMES = {"", "unknown", "agent", "none", "null"}

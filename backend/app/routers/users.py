@@ -19,7 +19,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.deps import BOT_SCOPES, DbSession, require_admin, require_leader
+from app.deps import BOT_SCOPES, WORKER_BOT_SCOPES, DbSession, require_admin, require_leader
 from app.paging import Page, count_rows
 from app.models import (
     CLOSED_STATUSES,
@@ -165,6 +165,8 @@ def create_user(
     _assert_email_free(db, email)
     _assert_handle_free(db, payload.handle)
     is_bot = payload.account_type is AccountType.bot
+    if payload.can_work and not is_bot:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="can_work: only a bot account takes this switch")
 
     if is_bot:
         # A bot proposes work; it never leads, administers or logs in.
@@ -187,6 +189,7 @@ def create_user(
         sides=[s.value for s in payload.sides or []],
         wip_limit=payload.wip_limit or 2,
         account_type=payload.account_type,
+        can_work=bool(payload.can_work and is_bot),
     )
     user.set_roles(roles)
     db.add(user)
@@ -216,6 +219,8 @@ def update_user(
         fields["sides"] = [s.value if hasattr(s, "value") else s for s in fields["sides"]]
 
     new_roles = user.effective_roles
+    if fields.get("can_work") and not user.is_bot:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="can_work: only a bot account takes this switch")
     if roles_in is not None or role_in is not None:
         if user.is_bot:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A bot's role cannot change")
@@ -232,6 +237,15 @@ def update_user(
         if value is not None or field in {"handle", "github_login"}:
             setattr(user, field, value)
     user.set_roles(new_roles)
+
+    if fields.get("can_work") is False and user.is_bot:
+        # Back to propose-only: its tokens lose the member scopes.
+        for token in db.scalars(select(ApiToken).where(ApiToken.user_id == user.id)):
+            kept = sorted(set(token.scopes or []) & set(BOT_SCOPES))
+            if kept != sorted(token.scopes or []):
+                token.scopes = kept
+                if not kept and token.revoked_at is None:
+                    token.revoked_at = utcnow()
 
     if fields.get("is_active") is False:
         # Deactivation also kills every API token the person holds.
@@ -277,8 +291,9 @@ def issue_bot_token(
     db: DbSession,
     admin: User = Depends(require_admin),
 ) -> ApiTokenCreated:
-    """Issue a token for a bot. Bot scopes are limited to reading, proposing
-    tasks and commenting on its own proposals."""
+    """Issue a token for a bot. A plain bot's scopes are limited to reading,
+    proposing tasks and commenting on its own proposals; a bot with `can_work`
+    may also hold the member scopes."""
     user = _get_user_or_404(db, user_id)
     if not user.is_bot:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not a bot account")
@@ -287,12 +302,14 @@ def issue_bot_token(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"expires_days: at most {settings.api_token_max_days}",
         )
-    scopes = payload.scopes if payload.scopes is not None else list(BOT_SCOPES)
-    extra = sorted(set(scopes) - set(BOT_SCOPES))
+    allowed = WORKER_BOT_SCOPES if user.is_worker_bot else BOT_SCOPES
+    scopes = payload.scopes if payload.scopes is not None else list(allowed)
+    extra = sorted(set(scopes) - set(allowed))
     if extra or not scopes:
+        who = "a bot that works tasks" if user.is_worker_bot else "a bot"
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"scopes: a bot may hold only {sorted(BOT_SCOPES)}" if extra else "scopes: pick at least one",
+            detail=f"scopes: {who} may hold only {sorted(allowed)}" if extra else "scopes: pick at least one",
         )
     now = utcnow()
     full, prefix, secret_hash = new_api_token()

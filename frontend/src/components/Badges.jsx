@@ -199,7 +199,7 @@ export function RoleBadge({ role }) {
 export function RoleBadges({ user }) {
   return (
     <span className="inline-flex flex-wrap items-center gap-1">
-      {isBot(user) && <BotBadge />}
+      {isBot(user) && <BotBadge works={Boolean(user.can_work)} />}
       {rolesOf(user).map((role) => (
         <RoleBadge key={role} role={role} />
       ))}
@@ -207,10 +207,13 @@ export function RoleBadges({ user }) {
   )
 }
 
-export function BotBadge() {
+export function BotBadge({ works = false }) {
   return (
-    <span className={`${pill} border-series2/40 bg-series2/5 text-series2`} title="Service account for an automated agent">
-      Bot
+    <span
+      className={`${pill} border-series2/40 bg-series2/5 text-series2`}
+      title={works ? 'Service account that works on tasks like a member' : 'Service account for an automated agent'}
+    >
+      {works ? 'Bot · works tasks' : 'Bot'}
     </span>
   )
 }

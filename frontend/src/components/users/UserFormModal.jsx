@@ -36,6 +36,7 @@ export default function UserFormModal({ user, onClose, onSubmit }) {
     github_login: user?.github_login ?? '',
     sides: user?.sides ?? [],
     wip_limit: user?.wip_limit ?? 2,
+    can_work: Boolean(user?.can_work),
   })
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -76,6 +77,7 @@ export default function UserFormModal({ user, onClose, onSubmit }) {
       wip_limit: Number(form.wip_limit) || 2,
     }
     if (!bot) payload.roles = pickedRoles
+    if (bot) payload.can_work = form.can_work
     if (!editing) {
       payload.account_type = form.account_type
       if (!bot) payload.password = form.password
@@ -125,7 +127,7 @@ export default function UserFormModal({ user, onClose, onSubmit }) {
               <p className="mt-1.5 text-xs text-ink-muted">
                 A bot is a service account for an automated agent. It has no password and never
                 signs in; you issue its tokens from its row. It reads tasks, files proposals for
-                triage and comments on its own proposals.
+                triage and comments on its own proposals, unless you let it work on tasks below.
               </p>
             )}
           </fieldset>
@@ -267,6 +269,24 @@ export default function UserFormModal({ user, onClose, onSubmit }) {
             The kinds of work this account picks up. Pick as many as apply.
           </p>
         </fieldset>
+
+        {bot && (
+          <label className="mt-4 flex items-start gap-2 rounded-lg border border-hairline px-3 py-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={form.can_work}
+              onChange={(event) => update('can_work', event.target.checked)}
+            />
+            <span>
+              <span className="font-medium">Can work on tasks</span>
+              <span className="block text-xs text-ink-muted">
+                Leads can assign it, and it claims, takes parts, comments and hands back like a
+                member. It still never leads, signs in or files top-level tasks outside proposals.
+              </span>
+            </span>
+          </label>
+        )}
 
         {!bot && (
           <fieldset className="mt-4">

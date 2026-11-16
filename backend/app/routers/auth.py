@@ -119,7 +119,7 @@ def list_users(
         people = [
             p for p in people
             if (wanted in p.effective_roles or (wanted == "lead" and p.is_lead))
-            and not (p.is_bot and wanted == "member")
+            and not (p.is_plain_bot and wanted == "member")
         ]
     if side is not None:
         people = [p for p in people if side in (p.sides or [])]

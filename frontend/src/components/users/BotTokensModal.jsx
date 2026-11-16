@@ -1,23 +1,25 @@
 import { useCallback, useEffect, useState } from 'react'
 import Modal from '../Modal'
 import { api } from '../../api/client'
-import { BOT_SCOPES, TOKEN_MAX_DAYS } from '../../lib/constants'
+import { BOT_SCOPES, TOKEN_MAX_DAYS, WORKER_BOT_EXTRA_SCOPES, isWorkerBot } from '../../lib/constants'
 import { formatDateTime } from '../../lib/format'
 import { NewTokenPanel, TOKEN_STATE_STYLES, tokenState } from '../TokenParts'
 
 const inputClass =
   'mt-1.5 w-full rounded-lg border border-hairline bg-surface-raised px-3 py-2 text-sm outline-none focus:border-series1'
 
-/** Admins list, issue and revoke a bot's tokens. Bot scopes are limited to
- *  the three the server allows. */
+/** Admins list, issue and revoke a bot's tokens. A plain bot's scopes are
+ *  limited to the three the server allows; a bot that works tasks may also
+ *  hold the member scopes. */
 export default function BotTokensModal({ bot, onClose }) {
+  const scopeChoices = isWorkerBot(bot) ? { ...BOT_SCOPES, ...WORKER_BOT_EXTRA_SCOPES } : BOT_SCOPES
   const [tokens, setTokens] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [created, setCreated] = useState(null)
   const [name, setName] = useState('')
   const [days, setDays] = useState(30)
-  const [picked, setPicked] = useState(Object.keys(BOT_SCOPES))
+  const [picked, setPicked] = useState(Object.keys(scopeChoices))
   const [saving, setSaving] = useState(false)
 
   const load = useCallback(async () => {
@@ -48,7 +50,7 @@ export default function BotTokensModal({ bot, onClose }) {
     try {
       const result = await api.issueBotToken(bot.id, {
         name: name.trim(),
-        scopes: Object.keys(BOT_SCOPES).filter((s) => picked.includes(s)),
+        scopes: Object.keys(scopeChoices).filter((s) => picked.includes(s)),
         expires_days: Math.min(TOKEN_MAX_DAYS, Math.max(1, Number(days) || 30)),
       })
       setCreated(result)
@@ -121,7 +123,7 @@ export default function BotTokensModal({ bot, onClose }) {
         <fieldset className="mt-4">
           <legend className="text-sm font-medium">Scopes</legend>
           <div className="mt-1.5 grid gap-2 sm:grid-cols-3">
-            {Object.entries(BOT_SCOPES).map(([scope, description]) => (
+            {Object.entries(scopeChoices).map(([scope, description]) => (
               <label key={scope} className="flex items-start gap-2 rounded-lg border border-hairline px-3 py-2 text-sm">
                 <input
                   type="checkbox"
