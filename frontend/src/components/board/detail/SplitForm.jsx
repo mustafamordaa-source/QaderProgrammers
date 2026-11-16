@@ -7,6 +7,7 @@ import {
   SIDE_LABELS,
   assignablePeople,
   isClosed,
+  personLabel,
 } from '../../../lib/constants'
 import { primaryButton, secondaryButton, sectionTitle, smallInputClass } from './ui'
 
@@ -148,14 +149,14 @@ export default function SplitForm({ ctx, onDone }) {
                   {onSide.length > 0 && (
                     <optgroup label={`Works on ${SIDE_LABELS[side]}`}>
                       {onSide.map((p) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
+                        <option key={p.id} value={p.id}>{personLabel(p)}</option>
                       ))}
                     </optgroup>
                   )}
                   {others.length > 0 && (
                     <optgroup label="Others">
                       {others.map((p) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
+                        <option key={p.id} value={p.id}>{personLabel(p)}</option>
                       ))}
                     </optgroup>
                   )}

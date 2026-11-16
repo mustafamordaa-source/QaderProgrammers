@@ -29,6 +29,7 @@ import {
   splitList,
   taskIdList,
   taskKey,
+  personLabel,
 } from '../../../lib/constants'
 import {
   formatDate,
@@ -330,7 +331,7 @@ function EditForm({ ctx, programmers, onDone }) {
               >
                 <option value="">Unassigned</option>
                 {programmers.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
+                  <option key={p.id} value={p.id}>{personLabel(p)}</option>
                 ))}
               </select>
             </div>
@@ -345,7 +346,7 @@ function EditForm({ ctx, programmers, onDone }) {
               >
                 <option value="">None</option>
                 {secondChoices.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
+                  <option key={p.id} value={p.id}>{personLabel(p)}</option>
                 ))}
               </select>
             </div>
@@ -642,7 +643,7 @@ function AssignControl({ ctx, programmers }) {
         <option value="">Assign to…</option>
         {choices.map((p) => (
           <option key={p.id} value={p.id}>
-            {p.id === user?.id ? 'Me' : p.name}
+            {p.id === user?.id ? 'Me' : personLabel(p)}
             {p.sides?.length ? ` (${p.sides.join(', ')})` : ''}
           </option>
         ))}

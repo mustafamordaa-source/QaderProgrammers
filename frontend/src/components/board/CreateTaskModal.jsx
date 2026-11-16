@@ -21,6 +21,7 @@ import {
   STATUS_LABELS,
   TASK_KINDS,
   splitList,
+  personLabel,
 } from '../../lib/constants'
 import { fromDateInputValue } from '../../lib/format'
 
@@ -521,7 +522,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
               <option value="">Nobody: anyone on its side can take it</option>
               {programmers.map((person) => (
                 <option key={person.id} value={person.id}>
-                  {person.name}
+                  {personLabel(person)}
                   {person.sides?.length ? ` (${person.sides.join(', ')})` : ''}
                 </option>
               ))}
@@ -580,7 +581,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
                   <option value="">Unassigned</option>
                   {programmers.map((person) => (
                     <option key={person.id} value={person.id}>
-                      {person.name}
+                      {personLabel(person)}
                     </option>
                   ))}
                 </select>
@@ -599,7 +600,7 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
                   <option value="">None</option>
                   {secondChoices.map((person) => (
                     <option key={person.id} value={person.id}>
-                      {person.name}
+                      {personLabel(person)}
                     </option>
                   ))}
                 </select>

@@ -138,6 +138,16 @@ tokens from `POST /users/{id}/tokens`, limited to `tasks:read`,
 `tasks:propose` and `comments:write`. Everything it files lands in
 `proposed`, and it can comment only on its own proposals.
 
+An admin can switch on **Can work on tasks** (`can_work`, `PATCH /users/{id}`)
+for a bot, such as `@qader-claude` that the Claude-server agents use. Leads can
+then assign it, and it claims, takes parts, moves its own tasks, comments and
+hands back like a member, within its sides. On tasks it works on it also writes
+criteria, evidence, git links and documents, and files open subtasks. It gets
+its work notifications in the app, never by email. Its tokens may carry the
+member scopes next to `tasks:propose`. It still cannot lead, administer or log
+in, and its new top-level tasks land in `proposed`. Switching it off trims its
+tokens back to the plain bot scopes.
+
 ## Documents, files and context
 
 - **Documents**: Markdown on a task (spec, plan, notes, test plan, decision,

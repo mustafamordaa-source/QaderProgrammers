@@ -269,6 +269,9 @@ class User(Base):
     account_type: Mapped[AccountType] = mapped_column(
         _str_enum(AccountType, "account_type"), default=AccountType.person, nullable=False
     )
+    # A bot an admin lets work tasks like a member (assigned, claims, parts,
+    # hand-backs). Only meaningful on bot accounts; false for people.
+    can_work: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Notifications: email on or off, which kinds, and an optional address
     # other than the login email.
     email_notifications: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -313,6 +316,16 @@ class User(Base):
     @property
     def is_bot(self) -> bool:
         return self.account_type is AccountType.bot
+
+    @property
+    def is_worker_bot(self) -> bool:
+        """A bot that works tasks like a member; it still never leads or logs in."""
+        return self.is_bot and bool(self.can_work)
+
+    @property
+    def is_plain_bot(self) -> bool:
+        """A propose-only bot: proposes tasks and replies when tagged."""
+        return self.is_bot and not self.can_work
 
     @property
     def work_role(self) -> Role:

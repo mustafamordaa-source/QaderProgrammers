@@ -60,12 +60,12 @@ def _note(db: Session, user: User | None, task: Task, kind: NotifyKind, text: st
     from app.notify import wants_email
     from app.routers.tasks import _can_see
 
-    if user is None or not user.is_active or user.is_bot or not _can_see(task, user):
+    if user is None or not user.is_active or user.is_plain_bot or not _can_see(task, user):
         return
     db.add(Notification(
         user_id=user.id, task_id=task.id, kind=kind, actor_id=None, actor_kind=ActorKind.human,
         text=text, created_at=now,
-        email_state="pending" if wants_email(user, kind) else "skipped",
+        email_state="pending" if not user.is_bot and wants_email(user, kind) else "skipped",
     ))
 
 

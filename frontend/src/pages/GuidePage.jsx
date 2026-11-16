@@ -105,7 +105,7 @@ const SECTIONS = [
       { type: 'h3', text: 'Bot accounts' },
       {
         type: 'p',
-        text: 'A bot account is for an automated agent, such as a code scanner. It cannot sign in with a password. An admin issues its tokens, limited to `tasks:read`, `tasks:propose` and `comments:write`. Everything a bot files lands in proposed. It comments on its own proposals, and elsewhere it only replies in a thread where someone tagged it or asked it a question. See "Ask the server agent".',
+        text: 'A bot account is for an automated agent, such as a code scanner. It cannot sign in with a password. An admin issues its tokens, limited to `tasks:read`, `tasks:propose` and `comments:write`. Everything a bot files lands in proposed. It comments on its own proposals, and elsewhere it only replies in a thread where someone tagged it or asked it a question. An admin can switch on "Can work on tasks" for a bot: leads can then assign it, it claims, takes parts, comments and hands back like a member, and its tokens may carry the member scopes. Its new top-level tasks still land in proposed. See "Ask the server agent".',
       },
     ],
   },

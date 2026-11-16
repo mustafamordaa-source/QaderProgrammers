@@ -9,7 +9,8 @@ the row is also queued (`email_state = "pending"`) for the batched sender in
 Nobody is told about their own action. Deactivated people and people who
 cannot see the task are never notified. A bot hears only when someone tags
 it (`@handle`) or asks it a question, never by email: its agent polls the
-notification list and replies in that thread.
+notification list and replies in that thread. A bot that works tasks
+(`can_work`) also hears about its own work, still in the app only.
 """
 
 from __future__ import annotations
@@ -32,6 +33,11 @@ MENTION_RE = re.compile(r"(?<![\w@.])@([a-z0-9][a-z0-9_-]{1,39})\b", re.IGNORECA
 LEAD_ONLY_KINDS = {NotifyKind.review, NotifyKind.proposal}
 # The only kinds a bot receives: the ones that ask it to reply.
 BOT_KINDS = {NotifyKind.mention, NotifyKind.question}
+# A bot that works tasks also hears about the work it holds.
+WORKER_BOT_KINDS = BOT_KINDS | {
+    NotifyKind.assigned, NotifyKind.answered, NotifyKind.rejected, NotifyKind.approved,
+    NotifyKind.claim_idle, NotifyKind.claim_freed,
+}
 # Sent by the hub about a person's own claims; not a setting.
 CLAIM_KINDS = {NotifyKind.claim_idle, NotifyKind.claim_freed}
 
@@ -79,7 +85,8 @@ def notify(
         seen.add(user.id)
         if user.id == auth.user.id or not user.is_active:
             continue
-        if user.is_bot and (kind not in BOT_KINDS or auth.user.is_bot):
+        bot_kinds = WORKER_BOT_KINDS if user.is_worker_bot else BOT_KINDS
+        if user.is_bot and (kind not in bot_kinds or auth.user.is_bot):
             continue
         if kind in LEAD_ONLY_KINDS and not user.is_lead:
             continue

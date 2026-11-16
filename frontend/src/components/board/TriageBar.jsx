@@ -6,6 +6,7 @@ import {
   SIDES,
   SIDE_LABELS,
   STATUS_LABELS,
+  personLabel,
 } from '../../lib/constants'
 import { dangerButton, primaryButton, secondaryButton, smallInputClass } from './detail/ui'
 
@@ -79,7 +80,7 @@ export default function TriageBar({ tasks, selectedIds, programmers, onClear, on
               <option value="">No assignee</option>
               {programmers.map((person) => (
                 <option key={person.id} value={person.id}>
-                  {person.name}
+                  {personLabel(person)}
                 </option>
               ))}
             </select>

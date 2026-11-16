@@ -87,6 +87,8 @@ class UserOut(ORMModel):
     role: Role
     roles: list[AccessRole] = Field(default_factory=list, validation_alias="effective_roles")
     account_type: AccountType = AccountType.person
+    # A bot an admin lets work tasks like a member.
+    can_work: bool = False
     is_active: bool
     created_at: datetime
     handle: str | None = None
@@ -134,6 +136,8 @@ class UserCreate(_ProfileFields):
     # Older clients send one role; `roles` wins when both are present.
     role: Role | None = None
     account_type: AccountType = AccountType.person
+    # Bots only: let the bot work tasks like a member.
+    can_work: bool = False
 
     @field_validator("name")
     @classmethod
@@ -150,6 +154,8 @@ class UserUpdate(_ProfileFields):
     roles: list[AccessRole] | None = None
     role: Role | None = None
     is_active: bool | None = None
+    # Bots only: let the bot work tasks like a member.
+    can_work: bool | None = None
 
     @field_validator("name")
     @classmethod

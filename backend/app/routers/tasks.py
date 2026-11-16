@@ -295,6 +295,8 @@ def _claim_block(task: Task, user: User, now, ignore_side: bool = False) -> tupl
     """Why `user` cannot claim `task` now, as (code, sentence); (None, None) when they can."""
     if user.is_read_only:
         return "viewer", "Viewer accounts are read-only"
+    if user.is_plain_bot:
+        return "bot", "Bots that only propose cannot claim; an admin can let this bot work tasks"
     st = task.status
     if st is S.proposed:
         return "proposed", "A lead has not accepted this proposal yet"
@@ -356,8 +358,8 @@ def _take_block(task: Task, criterion: Criterion, user: User, ignore_side: bool 
     """Why `user` cannot take this part now; None when they can."""
     if user.is_read_only:
         return "Viewer accounts are read-only"
-    if user.is_bot:
-        return "Bots cannot take parts"
+    if user.is_plain_bot:
+        return "Bots that only propose cannot take parts"
     if task.parent_id is not None:
         return "This is already a subtask; claim it instead"
     if criterion.state is not CriterionState.open:
@@ -529,10 +531,10 @@ def _validate_assignees(db: Session, assignee_1_id: int | None, assignee_2_id: i
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"{field}: user {uid} does not exist",
             )
-        if assignee.is_bot or not assignee.is_member:
+        if assignee.is_plain_bot or not assignee.is_member:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"{field}: tasks can only be assigned to members",
+                detail=f"{field}: tasks can only be assigned to members and bots that work tasks",
             )
         if not assignee.is_active:
             raise HTTPException(
@@ -623,8 +625,17 @@ def create_task(
 ) -> TaskDetailOut:
     user = auth.user
     _assert_not_viewer(user)
-    # Bots and propose-only tokens file proposals for a lead to triage.
-    propose_only = user.is_bot or not auth.has("tasks:create")
+    # Bots and propose-only tokens file proposals for a lead to triage. A bot
+    # that works tasks may also file a subtask of a task it works on, as an
+    # open part with no assignee, like a member.
+    bot_subtask = user.is_worker_bot and payload.parent_id is not None and auth.has("tasks:create")
+    if bot_subtask:
+        parent_task = _check_parent(db, None, payload.parent_id, user)
+        _assert_worker(parent_task, user)
+        if payload.assignee_1_id or payload.assignee_2_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="A bot files open parts; leave the assignees out")
+    propose_only = (user.is_bot and not bot_subtask) or not auth.has("tasks:create")
     is_leader = user.is_lead and not propose_only
 
     if not is_leader:
@@ -1472,8 +1483,8 @@ def split_task(
     user = auth.user
     _assert_visible(parent, user)
     _assert_not_viewer(user)
-    if user.is_bot:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bots cannot split tasks")
+    if user.is_plain_bot:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bots that only propose cannot split tasks")
     if not user.is_lead:
         _assert_worker(parent, user)
         if any(p.assignee_id for p in payload.parts):
@@ -2117,7 +2128,7 @@ def _refuse_claim(task: Task, user: User, cross_side_reason: str | None = None) 
         crossing = True
     if code is None or code == "claimed":
         return crossing
-    forbidden = {"viewer", "not_pool", "other_side", "assign_only"}
+    forbidden = {"viewer", "bot", "not_pool", "other_side", "assign_only"}
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN if code in forbidden else status.HTTP_409_CONFLICT,
         detail=text,
@@ -2252,7 +2263,7 @@ def take_part(
                 else "other_side" if "your profile lists" in reason else "not_pool" if "ask a lead before" in reason
                 else "assign_only" if "A lead assigns this one" in reason
                 else "blocked_by" if reason.startswith("Waits for") else "refused")
-        forbidden = user.is_read_only or user.is_bot or code in ("other_side", "not_pool", "assign_only")
+        forbidden = user.is_read_only or user.is_plain_bot or code in ("other_side", "not_pool", "assign_only")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN if forbidden else status.HTTP_409_CONFLICT,
                             detail=reason, headers={"X-Claim-Block": code})
 
@@ -2419,7 +2430,9 @@ def add_comment(
         if parent.parent_id is not None:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Reply to the top-level comment; threads are one level deep")
 
-    if user.is_bot and task.created_by != user.id:
+    # A bot that works this task comments like a member; any other bot only
+    # replies where it was tagged.
+    if user.is_bot and task.created_by != user.id and not (user.is_worker_bot and _is_worker(task, user)):
         _assert_bot_may_reply(db, user, task, parent, payload.kind)
 
     to_user = None
