@@ -633,10 +633,10 @@ def create_task(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="A proposal has no assignee; a lead assigns it at triage",
             )
-        if payload.restricted or payload.assign_only:
+        if payload.restricted or payload.assign_only or payload.requested_by or payload.requested_by_name:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only a leader marks a task restricted or assign-only",
+                detail="Only a leader marks a task restricted, assign-only or requested by managers",
             )
     _validate_assignees(db, payload.assignee_1_id, payload.assignee_2_id)
 
@@ -740,6 +740,9 @@ def create_task(
         restricted=bool(payload.restricted),
         assign_only=bool(payload.assign_only),
         audience=payload.audience or None,
+        requested_by=payload.requested_by or None,
+        requested_by_name=(payload.requested_by_name or "").strip() or None,
+        requested_at=payload.requested_at,
         created_kind=auth.kind,
         created_agent=auth.agent,
         kind=payload.kind,
@@ -828,7 +831,7 @@ def list_tasks(
     ),
     sort: str = Query(
         default="impact", pattern=r"^(impact|created|updated|priority|points|due|title)$",
-        description="impact (default): bugs first, then other work; inside each students first, then teachers, parents, managers, admins, unset, team, "
+        description="impact (default): manager and stakeholder requests first, then bugs, then other work; inside each students first, then teachers, parents, managers, admins, unset, team, "
                     "oldest first inside each; created: oldest first; updated: newest change first; priority: urgent first; "
                     "points: easiest first; due: soonest first; title: A to Z. `order` flips it.",
     ),
@@ -844,6 +847,8 @@ def list_tasks(
     claimable: bool = Query(default=False, description="Only tasks you can claim now"),
     audience: str | None = Query(default=None, max_length=80,
                                  description="Comma list of students, teachers, parents, managers, admins, team, none"),
+    requested_by: str | None = Query(default=None, max_length=80,
+                                     description="Comma list of managers, stakeholders, team, scan, none"),
 ) -> list[TaskOut]:
     """Tasks you can see, newest first. Send `page` and/or `page_size` to read a
     page at a time; the totals come back in the X-Total-* headers.
@@ -859,7 +864,7 @@ def list_tasks(
         mine=mine, ready=ready, q=q, include_closed=include_closed, created_kind=created_kind,
         created_by=created_by, from_bots=from_bots, kind=kind, parent_id=parent_id, pool=pool,
         my_sides=my_sides, area=area, lane=lane, priority=priority, kinds=kinds, subtasks=subtasks,
-        audience=audience,
+        audience=audience, requested_by=requested_by,
     )
     asked_ids = _asked_ids(db, user, awaiting_decision, to)
     if awaiting_decision:
@@ -931,8 +936,9 @@ def _ordering(sort: str, order: str | None):
         rank = case({"students": 0, "teachers": 1, "parents": 2, "managers": 3, "admins": 4, "team": 6},
                     value=Task.audience, else_=5)
         # Bugs come first, then everything else (redesign and new work); audience order inside each.
-        bugs_first = case((Task.kind == TaskKind.bug, 0), else_=1)
-        return [bugs_first, rank.asc() if asc else rank.desc(), Task.created_at.asc(), Task.id.asc()]
+        # Requests from managers and stakeholders first, then bugs, then everything else.
+        group = case((Task.requested_by.in_(["managers", "stakeholders"]), 0), (Task.kind == TaskKind.bug, 1), else_=2)
+        return [group, rank.asc() if asc else rank.desc(), Task.created_at.asc(), Task.id.asc()]
     if sort == "priority":
         rank = case({"urgent": 0, "high": 1, "medium": 2, "low": 3}, value=Task.priority, else_=9)
         keys = [rank.asc() if asc else rank.desc()]
@@ -977,7 +983,7 @@ def _filtered(
     db: Session, user: User, now, *, status_filter=None, statuses=None, assignee_id=None, side=None,
     mine=False, ready=False, q=None, include_closed=True, created_kind=None, created_by=None,
     from_bots=False, kind=None, parent_id=None, pool=None, my_sides=False, area=None, lane=None,
-    priority=None, kinds=None, subtasks="all", audience=None,
+    priority=None, kinds=None, subtasks="all", audience=None, requested_by=None,
 ):
     """The SQL part of the task filters, shared by the list and the facets."""
     stmt = select(Task)
@@ -1017,6 +1023,18 @@ def _filtered(
                                 detail=f"audience: no value '{bad[0]}'")
         named = [a for a in wanted if a != "none"]
         conds = ([Task.audience.in_(named)] if named else []) + ([Task.audience.is_(None)] if "none" in wanted else [])
+        stmt = stmt.where(or_(*conds))
+    if requested_by:
+        from app.models import REQUESTERS
+
+        wanted_r = [a.strip().lower() for a in requested_by.split(",") if a.strip()]
+        bad = [a for a in wanted_r if a not in REQUESTERS and a != "none"]
+        if bad:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"requested_by: no value '{bad[0]}'")
+        named = [a for a in wanted_r if a != "none"]
+        conds = ([Task.requested_by.in_(named)] if named else []) + \
+            ([Task.requested_by.is_(None)] if "none" in wanted_r else [])
         stmt = stmt.where(or_(*conds))
     if subtasks == "top":
         stmt = stmt.where(Task.parent_id.is_(None))
@@ -1098,6 +1116,7 @@ def facets(
     subtasks: str = Query(default="all", pattern=r"^(all|top|only)$"),
     claimable: bool = False,
     audience: str | None = Query(default=None, max_length=80),
+    requested_by: str | None = Query(default=None, max_length=80),
 ) -> FacetsOut:
     """Counts for the same filters as GET /tasks: by status, priority, kind,
     side, area and lane, plus how many you can claim. For filter chips and
@@ -1111,6 +1130,7 @@ def facets(
         mine=mine, ready=ready, q=q, include_closed=include_closed, kind=kind, parent_id=parent_id,
         pool=pool, my_sides=my_sides, area=area, lane=lane, priority=priority, kinds=kinds, subtasks=subtasks,
         created_kind=created_kind, created_by=created_by, from_bots=from_bots, audience=audience,
+        requested_by=requested_by,
     )
     stmt = stmt.options(selectinload(Task.criteria), selectinload(Task.children), selectinload(Task.incoming_links))
     if awaiting_decision:
@@ -1119,7 +1139,7 @@ def facets(
             Comment.kind == CommentKind.question, Comment.resolved_at.is_(None), Comment.to_user_id.in_(asked),
         )))
     out = FacetsOut(total=0, status={}, priority={}, kind={}, side={}, area={}, lane={}, claimable=0, subtasks=0,
-                    audience={}, area_tree={})
+                    audience={}, area_tree={}, requested_by={})
     all_areas = {a.id: a for a in db.scalars(select(Area))}
 
     def bump(bucket: dict, key) -> None:
@@ -1150,6 +1170,7 @@ def facets(
             node = all_areas.get(node.parent_id) if node.parent_id else None
         bump(out.lane, LANES.get(t.status))
         bump(out.audience, t.audience or "none")
+        bump(out.requested_by, t.requested_by or "none")
     return out
 
 
@@ -1322,7 +1343,9 @@ def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> 
         task = Task(
             title=title, description=description, priority=item.priority, status=item.status,
             created_by=auth.user.id, side=item.side, tags=item.tags or [], areas=[],
-            restricted=item.restricted, assign_only=item.assign_only, audience=item.audience or None, created_kind=auth.kind, created_agent=auth.agent,
+            restricted=item.restricted, assign_only=item.assign_only, audience=item.audience or None,
+            requested_by=item.requested_by or None, requested_by_name=item.requested_by_name,
+            requested_at=item.requested_at, created_kind=auth.kind, created_agent=auth.agent,
             kind=item.kind, fingerprint=fingerprint, area_id=area.id if area else None,
         )
         if item.points is not None:
@@ -1342,10 +1365,11 @@ def _import_one(db: Session, auth: Auth, item: ImportTask, *, dry_run: bool) -> 
     wanted: dict[str, object] = {"title": title}
     if "description" in sent:
         wanted["description"] = description
-    for field in ("kind", "priority", "side", "restricted", "points", "assign_only", "audience"):
+    for field in ("kind", "priority", "side", "restricted", "points", "assign_only", "audience", "requested_by",
+                  "requested_by_name", "requested_at"):
         if field in sent and getattr(item, field) is not None:
             # An empty audience clears it.
-            wanted[field] = getattr(item, field) or None if field == "audience" else getattr(item, field)
+            wanted[field] = getattr(item, field) or None if field in ("audience", "requested_by") else getattr(item, field)
     if "tags" in sent:
         wanted["tags"] = item.tags or []
     if "area" in sent:
@@ -1491,6 +1515,9 @@ def split_task(
             # A half of a bug is a bug: it sorts with the bugs.
             kind=parent.kind,
             audience=parent.audience,
+            requested_by=parent.requested_by,
+            requested_by_name=parent.requested_by_name,
+            requested_at=parent.requested_at,
             side=part.side,
             tags=list(parent.tags or []),
             areas=list(parent.areas or []),
@@ -1735,6 +1762,8 @@ def brief(task_id: int, auth: AuthCtx, db: DbSession) -> TaskBrief:
         truncated=truncated,
         audience=task.audience,
         area=task.area.slug if task.area else None,
+        requested_by=task.requested_by,
+        requested_by_name=task.requested_by_name,
         cross_side_ok=code == "other_side" and _claim_block(task, auth.user, now, ignore_side=True)[0] is None,
         claimable=claimable,
         claim_block=code,
@@ -1814,7 +1843,7 @@ def update_task(
             value = lint.clean(value, field=field)
         if field in {"restricted", "assign_only"} and value is None:
             continue
-        if field == "audience" and value == "":
+        if field in ("audience", "requested_by", "requested_by_name") and value == "":
             value = None
         if field in {"tags", "areas"} and value is None:
             value = []

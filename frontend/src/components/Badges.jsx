@@ -1,4 +1,4 @@
-import { AudienceIcon } from './board/BoardIcons'
+import { AudienceIcon, StarIcon } from './board/BoardIcons'
 import {
   ACTOR_KIND_LABELS,
   AUDIENCE_LABELS,
@@ -11,6 +11,9 @@ import {
   KIND_LABELS,
   KIND_STYLES,
   POINT_LABELS,
+  REQUESTER_BADGE_LABELS,
+  REQUESTER_GOLD_ICON,
+  REQUESTER_GOLD_STYLE,
   PRIORITY_LABELS,
   ROLE_LABELS,
   SIDE_LABELS,
@@ -19,6 +22,7 @@ import {
   isBot,
   rolesOf,
 } from '../lib/constants'
+import { formatDate } from '../lib/format'
 
 const pill = 'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium'
 
@@ -57,6 +61,22 @@ export function AudienceBadge({ audience, short = false }) {
       title={`Reaches: ${AUDIENCE_LABELS[audience] ?? audience}`}
     >
       <AudienceIcon className="h-3 w-3" />
+      {label}
+    </span>
+  )
+}
+
+/** The gold badge for a task a manager or stakeholder asked for; the name and date sit in the tooltip. */
+export function RequestedBadge({ requestedBy, name, date }) {
+  const label = REQUESTER_BADGE_LABELS[requestedBy]
+  if (!label) return null
+  const who = [name, date ? formatDate(date) : ''].filter(Boolean).join(', ')
+  return (
+    <span
+      className={`${pill} ${REQUESTER_GOLD_STYLE}`}
+      title={`Requested by a ${label.toLowerCase()}${who ? `: ${who}` : ''}`}
+    >
+      <StarIcon className={`h-3 w-3 ${REQUESTER_GOLD_ICON}`} />
       {label}
     </span>
   )

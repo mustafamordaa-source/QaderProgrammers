@@ -162,7 +162,7 @@ export const api = {
   tasksPage: (filters, pageNumber, pageSize) => page('/tasks', filters, pageNumber, pageSize),
   // Counts for the filter menus, for the same filters as the list (no paging):
   // { total, status, priority, kind, side, area, lane: {planned, backlog}, claimable, subtasks }.
-  // Also `audience` ({students: n, ..., none: n}).
+  // Also `audience` ({students: n, ..., none: n}) and `requested_by` ({managers: n, ..., none: n}).
   facets: (filters) => request('/tasks/facets', { params: filters }),
   inbox: () => request('/tasks/inbox'),
   task: (id) => request(`/tasks/${id}`),

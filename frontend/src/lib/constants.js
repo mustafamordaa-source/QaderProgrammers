@@ -647,3 +647,34 @@ export function groupPeople(people) {
   }
   return [...byKey.values()]
 }
+
+// Who asked for a task. Mirrors the task `requested_by` field; null means
+// unknown and reads as team. Managers' and stakeholders' requests come first
+// in the Impact sort.
+export const REQUESTERS = ['managers', 'stakeholders', 'team', 'scan']
+
+// Board filter values: every requester plus `none` (not set).
+export const REQUESTER_FILTER_VALUES = [...REQUESTERS, 'none']
+
+export const REQUESTER_LABELS = {
+  managers: 'Managers',
+  stakeholders: 'Stakeholders',
+  team: 'Team',
+  scan: 'Scan',
+  none: 'Not set',
+}
+
+// The word on the gold badge, one person's worth.
+export const REQUESTER_BADGE_LABELS = {
+  managers: 'Manager',
+  stakeholders: 'Stakeholder',
+}
+
+/** Does this task carry the gold badge (a manager or stakeholder asked)? */
+export function isVipRequest(task) {
+  return task?.requested_by === 'managers' || task?.requested_by === 'stakeholders'
+}
+
+// The gold badge: full class strings so Tailwind keeps them.
+export const REQUESTER_GOLD_STYLE = 'border-warning/60 bg-warning/15 font-semibold text-ink'
+export const REQUESTER_GOLD_ICON = 'text-warning'

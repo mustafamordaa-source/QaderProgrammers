@@ -6,6 +6,7 @@ import AreaPicker from './AreaPicker'
 import SimilarTasks from './SimilarTasks'
 import PointsPicker from './PointsPicker'
 import TaskPicker from './TaskPicker'
+import RequesterFields from './RequesterFields'
 import { loadTemplates } from './taskTemplates'
 import {
   AUDIENCES,
@@ -63,6 +64,9 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
     restricted: false,
     assign_only: false,
     kind: 'task',
+    requested_by: '',
+    requested_by_name: '',
+    requested_at: '',
     use_template: true,
   })
   const [parent, setParent] = useState(preset?.parent ?? null)
@@ -177,6 +181,9 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
         assignee_2_id: form.assignee_2_id ? Number(form.assignee_2_id) : null,
         restricted: form.restricted,
         assign_only: form.assign_only,
+        requested_by: form.requested_by || null,
+        requested_by_name: form.requested_by_name.trim() || null,
+        requested_at: form.requested_at || null,
       })
     } else {
       payload.status = 'backlog'
@@ -600,6 +607,17 @@ export default function CreateTaskModal({ isLead, programmers, onClose, onCreate
             </div>
             <p className="mt-2 text-xs text-ink-muted">
               Two assignees share one task. Both see it, and either can move it forward.
+            </p>
+
+            <RequesterFields
+              idPrefix="create"
+              className="mt-4"
+              value={form}
+              onChange={update}
+              inputClass={inputClass}
+            />
+            <p className="mt-2 text-xs text-ink-muted">
+              Managers’ and stakeholders’ requests get a gold badge and come first on the board.
             </p>
 
             <div className="mt-4 space-y-2 text-sm">

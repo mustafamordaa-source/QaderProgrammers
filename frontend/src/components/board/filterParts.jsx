@@ -10,6 +10,7 @@ export const chipBase =
 
 export function chipTone(active, tone = 'series1') {
   if (!active) return 'border-hairline text-ink-secondary hover:border-series1/40 hover:text-ink'
+  if (tone === 'gold') return 'border-warning bg-warning/15 text-ink'
   return tone === 'series2'
     ? 'border-series2 bg-series2/10 text-series2'
     : 'border-series1 bg-series1/10 text-series1'

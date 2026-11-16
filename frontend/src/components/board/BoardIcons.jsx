@@ -214,3 +214,13 @@ export const AudienceIcon = (props) => (
     <path d="M4.5 7.6v2.9c0 .9 1.6 2 3.5 2s3.5-1.1 3.5-2V7.6M14.5 6v3.5" />
   </Icon>
 )
+
+/** A filled star: a manager or stakeholder asked for the task. */
+export const StarIcon = (props) => (
+  <Icon {...props}>
+    <path
+      fill="currentColor"
+      d="m8 1.8 1.85 3.85 4.2.55-3.07 2.92.78 4.17L8 11.25l-3.76 2.04.78-4.17L1.95 6.2l4.2-.55L8 1.8Z"
+    />
+  </Icon>
+)
