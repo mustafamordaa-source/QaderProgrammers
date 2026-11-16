@@ -1482,6 +1482,8 @@ def split_task(
             created_by=user.id,
             assignee_1_id=part.assignee_id,
             assign_only=parent.assign_only,
+            # A half of a bug is a bug: it sorts with the bugs.
+            kind=parent.kind,
             audience=parent.audience,
             side=part.side,
             tags=list(parent.tags or []),

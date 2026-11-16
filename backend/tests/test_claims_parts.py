@@ -543,3 +543,11 @@ def test_impact_puts_bugs_first(client, auth, leader, db_session):
         client, h, _item("QX-B1", kind="feature", audience="students"),
         _item("QX-B2", kind="bug", audience="team"), _item("QX-B3", kind="bug", audience="students"))
     assert [r["id"] for r in client.get("/tasks", headers=h).json()] == [student_bug, team_bug, page]
+
+
+def test_split_halves_keep_the_parent_kind(client, auth, leader, db_session):
+    h = auth(leader)
+    [tid] = _import(client, h, _item("QX-K1", kind="bug", criteria=["A", "B"]))
+    kids = client.post(f"/tasks/{tid}/split", headers=h, json={"parts": [
+        {"side": "be", "parts_from": [1]}, {"side": "fe", "parts_from": [2]}]}).json()["children"]
+    assert {k["kind"] for k in kids} == {"bug"}
