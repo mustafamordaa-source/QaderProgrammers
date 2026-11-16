@@ -206,3 +206,11 @@ export const PartIcon = (props) => (
     <path d="M8 2.5v11M2.5 8H8" />
   </Icon>
 )
+
+/** A graduation cap: who the task reaches (its audience). */
+export const AudienceIcon = (props) => (
+  <Icon {...props}>
+    <path d="M1.5 6 8 3l6.5 3L8 9 1.5 6Z" />
+    <path d="M4.5 7.6v2.9c0 .9 1.6 2 3.5 2s3.5-1.1 3.5-2V7.6M14.5 6v3.5" />
+  </Icon>
+)

@@ -1,5 +1,6 @@
 import {
   ActorBadge,
+  AudienceBadge,
   BlockedBadge,
   DeployBadge,
   KindBadge,
@@ -10,6 +11,8 @@ import {
   StatusBadge,
 } from '../Badges'
 import {
+  AUDIENCE_LABELS,
+  AUDIENCE_SHORT_LABELS,
   DEPLOY_LABELS,
   KIND_LABELS,
   PRIORITY_LABELS,
@@ -25,6 +28,7 @@ import {
 import { formatDate, formatDateTime, initials, isOverdue } from '../../lib/format'
 import {
   AgentIcon,
+  AudienceIcon,
   BlockedIcon,
   CheckIcon,
   ClaimIcon,
@@ -392,6 +396,17 @@ export default function TaskCard({
           {task.kind && task.kind !== 'task' && (
             <span className="text-[11px] font-medium text-ink-secondary">{KIND_LABELS[task.kind] ?? task.kind}</span>
           )}
+          {task.audience && (
+            <span
+              title={`Reaches: ${AUDIENCE_LABELS[task.audience] ?? task.audience}`}
+              className={`inline-flex items-center gap-0.5 text-[11px] ${
+                task.audience === 'students' ? 'font-semibold text-series1' : 'text-ink-muted'
+              }`}
+            >
+              <AudienceIcon className="h-3 w-3" />
+              {AUDIENCE_SHORT_LABELS[task.audience] ?? task.audience}
+            </span>
+          )}
           {task.side && <span className="text-[11px] text-ink-muted">{SIDE_LABELS[task.side] ?? task.side}</span>}
           {task.area && <span dir="auto" className="text-[11px] text-series2">{task.area.name}</span>}
           <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
@@ -427,6 +442,7 @@ export default function TaskCard({
                 {task.area.name}
               </span>
             )}
+            <AudienceBadge audience={task.audience} short />
             <KindBadge kind={task.kind} hideTask />
             <SideBadge side={task.side} />
             <PointsBadge points={task.points} />

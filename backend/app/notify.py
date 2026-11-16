@@ -51,10 +51,12 @@ def wants_email(user: User, kind: NotifyKind) -> bool:
 
 
 def _excerpt(task: Task, text: str | None) -> str | None:
-    if task.restricted or not text:
+    """The text a notification keeps: the whole comment up to 2,000 characters.
+    Email leaves it out on restricted tasks (see app.mailer)."""
+    if not text:
         return None
-    text = " ".join(text.split())
-    return text[:297] + "..." if len(text) > 300 else text
+    text = text.strip()
+    return text[:1997] + "..." if len(text) > 2000 else text
 
 
 def notify(

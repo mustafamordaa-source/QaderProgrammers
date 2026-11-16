@@ -368,7 +368,12 @@ const SECTIONS = [
       { type: 'h3', text: 'The Free to take view' },
       {
         type: 'p',
-        text: 'Press Free to take at the top of the board to see only what you can take now: To do first, then Backlog. Each card says Planned or Backlog. The other views are My work, Needs decision and Blocked. Filters stay in the address bar, so you can send a filtered board as a link. Sort orders every column: Created (oldest first, the default, so open work gets finished before new work starts), Last change, Priority (urgent first), Effort (easiest first), Due date or Title; the arrow button reverses it. In the CLI: qhub ready --sort priority, qhub ls --sort points --desc.',
+        text: 'Press Free to take at the top of the board to see only what you can take now: To do first, then Backlog. Each card says Planned or Backlog. The other views are My work, Needs decision and Blocked. Filters stay in the address bar, so you can send a filtered board as a link. Sort orders every column: Impact (the default), Created (oldest first), Last change, Priority (urgent first), Effort (easiest first), Due date or Title; the arrow button reverses it. In the CLI: qhub ready --sort priority, qhub ls --sort points --desc.',
+      },
+      { type: 'h3', text: 'Audience and the Impact sort' },
+      {
+        type: 'p',
+        text: 'Each task can say who it reaches: Students, Teachers, Parents, Managers, Admins or Team (internal work such as tooling and pipelines). Set it under “Who does it reach?” when you create or edit a task; leave it empty when you’re not sure. Cards show it with a cap icon, and the Audience chip filters by it. The board sorts by Impact unless you pick another sort: student work first, then teachers, parents, managers, admins, tasks with no audience, and team work last, oldest first inside each group. The arrow button puts team work first.',
       },
       { type: 'h3', text: 'From the CLI' },
       {
@@ -545,7 +550,12 @@ const SECTIONS = [
       },
       {
         type: 'p',
-        text: 'You never hear about your own actions. People who cannot see a task hear nothing about it, and a restricted task\'s notification carries no text. Every notification shows in the bell and the Inbox. Email comes on top.',
+        text: 'You never hear about your own actions. People who cannot see a task hear nothing about it. Every notification shows in the bell and the Inbox. Email comes on top.',
+      },
+      { type: 'h3', text: 'What a notification shows' },
+      {
+        type: 'p',
+        text: 'Each notification reads on its own: who did what, the task key and title, a line with the task’s status, priority, side, area, audience, claim and parts, and the full comment. Long comments fold after six lines; Show more opens the rest. A reply also shows the start of what it answers. Click a notification to open the task. Emails carry the same: who and what, the task, the status line, the full text, what it replies to and a button to the task. An email about a restricted task names only who, what happened and the task key; open the hub to read the rest.',
       },
       { type: 'h3', text: 'Email' },
       {

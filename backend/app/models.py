@@ -366,6 +366,8 @@ class Task(Base):
     # Retired: the old "pool" box. Kept as a column so old rows load; nothing reads it.
     # `pool` below now answers whether the task is open to its side.
     pool_flag: Mapped[bool] = mapped_column("pool", Boolean, default=False, nullable=False)
+    # Who the problem reaches: students, teachers, parents, managers, admins or team.
+    audience: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
     # Sensitive work: only a lead's chosen assignee takes it, never the side at large.
     assign_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
     # Where blocked / needs_confirm return to.
@@ -786,6 +788,9 @@ class NotifyKind(str, enum.Enum):
 
 # What a person gets by email unless they change it. Leads also get
 # review and proposal, which only leads receive at all.
+# Who a task's problem reaches, in Impact order (unset sorts between admins and team).
+AUDIENCES: tuple[str, ...] = ("students", "teachers", "parents", "managers", "admins", "team")
+
 DEFAULT_EMAIL_KINDS: tuple[str, ...] = (
     "assigned", "question", "answered", "mention", "rejected", "review", "proposal",
 )

@@ -130,6 +130,8 @@ export function isVersionConflict(err) {
   return err instanceof ApiError && err.status === 409 && /changed since you read it/i.test(err.message)
 }
 
+const NOTIFICATION_EXPAND = 'task,thread'
+
 export const api = {
   login: (email, password) => request('/auth/login', { method: 'POST', body: { email, password } }),
   me: () => request('/auth/me'),
@@ -156,6 +158,7 @@ export const api = {
   tasksPage: (filters, pageNumber, pageSize) => page('/tasks', filters, pageNumber, pageSize),
   // Counts for the filter menus, for the same filters as the list (no paging):
   // { total, status, priority, kind, side, area, lane: {planned, backlog}, claimable, subtasks }.
+  // Also `audience` ({students: n, ..., none: n}).
   facets: (filters) => request('/tasks/facets', { params: filters }),
   inbox: () => request('/tasks/inbox'),
   task: (id) => request(`/tasks/${id}`),
@@ -264,10 +267,19 @@ export const api = {
   issueBotToken: (id, payload) => request(`/users/${id}/tokens`, { method: 'POST', body: payload }),
 
   // Notifications. Preferences and the test email need a browser login.
+  // Rows come with `task` (a snapshot) and `thread` (the comment and what it
+  // replies to) so each one reads on its own.
   notifications: ({ unread, limit } = {}) =>
-    request('/notifications', { params: { unread: unread ? 'true' : undefined, limit } }),
+    request('/notifications', {
+      params: { unread: unread ? 'true' : undefined, limit, expand: NOTIFICATION_EXPAND },
+    }),
   notificationsPage: ({ unread } = {}, pageNumber, pageSize) =>
-    page('/notifications', { unread: unread ? 'true' : undefined }, pageNumber, pageSize),
+    page(
+      '/notifications',
+      { unread: unread ? 'true' : undefined, expand: NOTIFICATION_EXPAND },
+      pageNumber,
+      pageSize,
+    ),
   notificationCount: () => request('/notifications/count'),
   markNotificationsRead: (ids) => request('/notifications/read', { method: 'POST', body: { ids } }),
   markAllNotificationsRead: () => request('/notifications/read', { method: 'POST', body: { all: true } }),

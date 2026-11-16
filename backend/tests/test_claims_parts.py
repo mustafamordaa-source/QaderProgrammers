@@ -407,7 +407,7 @@ class TestSorting:
                           _item("QX-81", priority="urgent", points=2), _item("QX-82", priority="medium", points=5))
         ids = lambda q: [r["id"] for r in client.get(f"/tasks?{q}", headers=h).json()]  # noqa: E731
         assert ids("") == [a, b, c]  # oldest first by default
-        assert ids("order=desc") == [c, b, a]
+        assert ids("sort=created&order=desc") == [c, b, a]
         assert ids("sort=priority") == [b, c, a]  # urgent first
         assert ids("sort=priority&order=desc") == [a, c, b]
         assert ids("sort=points") == [b, c, a]  # easiest first
@@ -421,3 +421,40 @@ class TestSorting:
         for page in (1, 2, 3):
             seen += [r["id"] for r in client.get(f"/tasks?sort=priority&page={page}&page_size=2", headers=h).json()]
         assert len(seen) == len(set(seen)) == 5
+
+
+class TestAudience:
+    def test_impact_is_the_default_sort(self, client, auth, leader, db_session):
+        h = auth(leader)
+        team, unset, students, parents = _import(
+            client, h, _item("QX-A1", audience="team"), _item("QX-A2"),
+            _item("QX-A3", audience="students"), _item("QX-A4", audience="parents"))
+        ids = [r["id"] for r in client.get("/tasks", headers=h).json()]
+        assert ids == [students, parents, unset, team]
+        ids = [r["id"] for r in client.get("/tasks?order=desc", headers=h).json()]
+        assert ids == [team, unset, parents, students]
+
+    def test_filter_facets_set_and_clear(self, client, auth, leader, alice, db_session):
+        h = auth(leader)
+        a, b = _import(client, h, _item("QX-A5", audience="students"), _item("QX-A6"))
+        assert [r["id"] for r in client.get("/tasks?audience=students", headers=h).json()] == [a]
+        assert [r["id"] for r in client.get("/tasks?audience=none", headers=h).json()] == [b]
+        f = client.get("/tasks/facets", headers=h).json()
+        assert f["audience"] == {"students": 1, "none": 1}
+        r = client.patch(f"/tasks/{b}", headers=h, json={"audience": "Teachers"})
+        assert r.status_code == 200 and r.json()["audience"] == "teachers"
+        r = client.patch(f"/tasks/{b}", headers=h, json={"audience": ""})
+        assert r.json()["audience"] is None
+        assert client.patch(f"/tasks/{b}", headers=h, json={"audience": "aliens"}).status_code == 422
+        assert client.get("/tasks?audience=aliens", headers=h).status_code == 422
+        t = client.post("/tasks", headers=auth(alice), json={"title": "Student bug", "audience": "students"}).json()
+        assert t["audience"] == "students"
+        assert client.get(f"/tasks/{a}/brief", headers=h).json()["audience"] == "students"
+
+
+def test_import_empty_audience_clears_it(client, auth, leader, db_session):
+    h = auth(leader)
+    [tid] = _import(client, h, _item("QX-A9", audience="students"))
+    _import(client, h, _item("QX-A9", audience=""))
+    assert db_session.get(Task, tid).audience is None
+    assert [r["id"] for r in client.get("/tasks?audience=none", headers=h).json()] == [tid]
