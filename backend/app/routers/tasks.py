@@ -299,7 +299,7 @@ def _claim_block(task: Task, user: User, now) -> tuple[str | None, str | None]:
         return "proposed", "A lead has not accepted this proposal yet"
     if st is S.in_review:
         return "in_review", "The work is in review"
-    if st is S.needs_confirm:
+    if st is S.needs_confirm or (task.parent is not None and task.parent.status is S.needs_confirm):
         return "waiting_decision", "Waiting for a decision from a lead"
     if st is S.blocked:
         return "blocked", "Parked as blocked; read the task for the reason"
@@ -1454,10 +1454,13 @@ def split_task(
             ),
             priority=parent.priority,
             points=part.points or parent.points,
-            status=S.to_do,
+            # A backlog parent splits into backlog parts; anything else into planned parts.
+            status=S.backlog if parent.status is S.backlog else S.to_do,
             due_date=parent.due_date,
             created_by=user.id,
             assignee_1_id=part.assignee_id,
+            assign_only=parent.assign_only,
+            audience=parent.audience,
             side=part.side,
             tags=list(parent.tags or []),
             areas=list(parent.areas or []),
@@ -1471,9 +1474,19 @@ def split_task(
         )
         db.add(child)
         db.flush()
-        for n, text in enumerate(part.criteria, start=1):
+        texts = list(part.criteria)
+        by_n = {c.n: c for c in parent.criteria}
+        for pn in part.parts_from:
+            src = by_n.get(pn)
+            if src is None:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    detail=f"parts_from: no part {pn} on #{parent.id}")
+            texts.append(f"{part.parts_prefix.get(pn, '')}{src.text}"[:1000])
+            if src.subtask_id is None and src.state is CriterionState.open:
+                src.subtask_id = child.id
+        for n, text in enumerate(texts, start=1):
             db.add(Criterion(task_id=child.id, n=n, text=lint.clean(text, field=f"criterion {n}")))
-        record(db, auth, task_id=child.id, event_type=EventType.created, to_status=S.to_do, timestamp=now,
+        record(db, auth, task_id=child.id, event_type=EventType.created, to_status=child.status, timestamp=now,
                data={"split_from": parent.id, "side": part.side.value})
         notify(db, auth, users=_people(db, [part.assignee_id]), task=child, kind=NotifyKind.assigned,
                text=child.description)

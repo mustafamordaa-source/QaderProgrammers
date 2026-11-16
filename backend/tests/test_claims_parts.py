@@ -458,3 +458,42 @@ def test_import_empty_audience_clears_it(client, auth, leader, db_session):
     _import(client, h, _item("QX-A9", audience=""))
     assert db_session.get(Task, tid).audience is None
     assert [r["id"] for r in client.get("/tasks?audience=none", headers=h).json()] == [tid]
+
+
+class TestSplitParts:
+    def test_split_carries_and_links_parent_parts(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        h = auth(leader)
+        [tid] = _import(client, h, _item("QX-S1", audience="students", criteria=["API check", "Page shows it", "Both"]))
+        out = client.post(f"/tasks/{tid}/split", headers=h, json={"parts": [
+            {"side": "be", "parts_from": [1, 3], "parts_prefix": {"3": "API half: "}},
+            {"side": "fe", "parts_from": [2, 3], "parts_prefix": {"3": "UI half: "}},
+        ]})
+        assert out.status_code == 201, out.text
+        kids = {c["side"]: c for c in out.json()["children"]}
+        be = client.get(f"/tasks/{kids['be']['id']}", headers=h).json()
+        fe = client.get(f"/tasks/{kids['fe']['id']}", headers=h).json()
+        assert [c["text"] for c in be["criteria"]] == ["API check", "API half: Both"]
+        assert [c["text"] for c in fe["criteria"]] == ["Page shows it", "UI half: Both"]
+        assert be["status"] == "backlog" and be["audience"] == "students"
+        parent = client.get(f"/tasks/{tid}", headers=h).json()
+        assert [c["subtask"]["id"] if c["subtask"] else None for c in parent["criteria"]] == \
+            [be["id"], fe["id"], be["id"]]
+        # Approving the backend half marks parts 1 and 3 met.
+        db_session.query(Criterion).filter_by(task_id=be["id"]).update({"state": "met", "evidence": "ok"})
+        db_session.commit()
+        client.post(f"/tasks/{be['id']}/claim", headers=auth(alice), json={})
+        client.patch(f"/tasks/{be['id']}/status", headers=auth(alice), json={"status": "in_review"})
+        assert client.patch(f"/tasks/{be['id']}/status", headers=h, json={"status": "done"}).status_code == 200
+        parent = client.get(f"/tasks/{tid}", headers=h).json()
+        assert [c["state"] for c in parent["criteria"]] == ["met", "open", "met"]
+
+    def test_parts_of_a_task_waiting_for_a_decision_wait_too(self, client, auth, leader, alice, db_session):
+        _member(alice, db_session)
+        h = auth(leader)
+        [tid] = _import(client, h, _item("QX-S2", side="be", criteria=["A"], question="Allowed?",
+                                         question_to=str(leader.id)))
+        out = client.post(f"/tasks/{tid}/split", headers=h, json={"parts": [{"side": "be", "parts_from": [1]}]})
+        kid = out.json()["children"][0]["id"]
+        r = client.post(f"/tasks/{kid}/claim", headers=auth(alice), json={})
+        assert r.status_code == 409 and r.headers["X-Claim-Block"] == "waiting_decision"
