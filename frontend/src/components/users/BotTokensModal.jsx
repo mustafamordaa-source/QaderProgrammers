@@ -18,6 +18,7 @@ export default function BotTokensModal({ bot, onClose }) {
   const [error, setError] = useState(null)
   const [created, setCreated] = useState(null)
   const [name, setName] = useState('')
+  const [agent, setAgent] = useState('')
   const [days, setDays] = useState(30)
   const [picked, setPicked] = useState(Object.keys(scopeChoices))
   const [saving, setSaving] = useState(false)
@@ -52,9 +53,11 @@ export default function BotTokensModal({ bot, onClose }) {
         name: name.trim(),
         scopes: Object.keys(scopeChoices).filter((s) => picked.includes(s)),
         expires_days: Math.min(TOKEN_MAX_DAYS, Math.max(1, Number(days) || 30)),
+        ...(agent.trim() ? { agent_name: agent.trim() } : {}),
       })
       setCreated(result)
       setName('')
+      setAgent('')
       await load()
     } catch (err) {
       setError(err.message)
@@ -88,7 +91,7 @@ export default function BotTokensModal({ bot, onClose }) {
 
       <form onSubmit={issue} className="rounded-xl border border-hairline p-4">
         <h3 className="text-sm font-semibold">Issue a token</h3>
-        <div className="mt-3 grid gap-4 sm:grid-cols-[1fr_10rem]">
+        <div className="mt-3 grid gap-4 sm:grid-cols-[1fr_12rem_10rem]">
           <div>
             <label className="block text-sm font-medium" htmlFor="bot-token-name">
               Name
@@ -103,6 +106,26 @@ export default function BotTokensModal({ bot, onClose }) {
               onChange={(event) => setName(event.target.value)}
               className={inputClass}
             />
+          </div>
+          <div>
+            <label className="block text-sm font-medium" htmlFor="bot-token-agent">
+              Agent name (optional)
+            </label>
+            <input
+              id="bot-token-agent"
+              maxLength={80}
+              dir="ltr"
+              pattern="[A-Za-z0-9][A-Za-z0-9_.\-]+"
+              placeholder="cs-agent-a"
+              value={agent}
+              onChange={(event) => setAgent(event.target.value)}
+              className={inputClass}
+              aria-describedby="bot-token-agent-help"
+            />
+            <p id="bot-token-agent-help" className="mt-1 text-xs text-ink-muted">
+              Fixes the agent this token acts as. Several agents can then share the bot and keep their own
+              claims, My tasks and notifications.
+            </p>
           </div>
           <div>
             <label className="block text-sm font-medium" htmlFor="bot-token-days">
@@ -164,6 +187,11 @@ export default function BotTokensModal({ bot, onClose }) {
               <li key={token.id} className={`flex flex-wrap items-center gap-2 px-3 py-2.5 text-sm ${state === 'active' ? '' : 'opacity-60'}`}>
                 <span dir="auto" className="font-medium">{token.name}</span>
                 <code dir="ltr" className="font-mono text-xs text-ink-secondary">{token.prefix}</code>
+                {token.agent_name && (
+                  <span className="rounded-full border border-hairline px-2 py-0.5 text-[11px] text-ink-secondary">
+                    agent <code dir="ltr" className="font-mono">{token.agent_name}</code>
+                  </span>
+                )}
                 <span className="flex flex-wrap gap-1">
                   {token.scopes.map((scope) => (
                     <code key={scope} dir="ltr" className="rounded border border-hairline px-1.5 py-0.5 font-mono text-[11px] text-ink-secondary">

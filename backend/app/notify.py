@@ -11,6 +11,13 @@ cannot see the task are never notified. A bot hears only when someone tags
 it (`@handle`) or asks it a question, never by email: its agent polls the
 notification list and replies in that thread. A bot that works tasks
 (`can_work`) also hears about its own work, still in the app only.
+
+Several agents can share one bot, each with a token bound to its agent name
+(`ApiToken.agent_name`). Each such agent gets its own row (`for_agent`), so
+read state is per agent. Rows for a bot go to the agents that worked the task
+(claimed it, handed it back), plus the plain row (`for_agent` NULL) that the
+bot's unbound tokens read. When one agent of the bot acts, the bot's other
+agents that worked the task hear about it; the actor never hears about itself.
 """
 
 from __future__ import annotations
@@ -23,7 +30,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import DEFAULT_EMAIL_KINDS, Notification, NotifyKind, Task, User, utcnow
+from app.models import (
+    DEFAULT_EMAIL_KINDS, ApiToken, CommentKind, EventType, Notification, NotifyKind, Task, TaskStatus, User, utcnow,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from app.deps import Auth
@@ -65,6 +74,53 @@ def _excerpt(task: Task, text: str | None) -> str | None:
     return text[:1997] + "..." if len(text) > 2000 else text
 
 
+def bound_agents(db: Session, user: User) -> set[str]:
+    """Agent names on the bot's live tokens (tokens an admin issued for one agent)."""
+    if not user.is_bot:
+        return set()
+    now = utcnow()
+    rows = db.scalars(select(ApiToken.agent_name).where(
+        ApiToken.user_id == user.id, ApiToken.agent_name.is_not(None),
+        ApiToken.revoked_at.is_(None), ApiToken.expires_at > now,
+    ))
+    return {name for name in rows if name}
+
+
+def worked_agents(task: Task, user: User) -> set[str]:
+    """Agents of `user` that claimed, handed back or sent this task to review."""
+    names = {
+        e.agent_name for e in task.events
+        if e.actor_id == user.id and e.agent_name and (
+            e.event_type is EventType.claimed
+            or (e.event_type is EventType.status_changed and e.to_status is TaskStatus.in_review)
+        )
+    }
+    names |= {c.agent_name for c in task.comments
+              if c.author_id == user.id and c.kind is CommentKind.handback and c.agent_name}
+    if task.claimed_by == user.id and task.claim_agent:
+        names.add(task.claim_agent)
+    return names
+
+
+def _targets(db: Session, auth: "Auth", user: User, task: Task, wanted: set[str | None] | None) -> list[str | None]:
+    """Which rows `user` gets: None is the plain row, a name is one agent's row."""
+    bound = bound_agents(db, user)
+    if user.id == auth.user.id:
+        # Only an agent with its own bound token tells its siblings; the actor never hears itself.
+        if not auth.user.bound_agent:
+            return []
+        pool = (bound if wanted is not None else bound & worked_agents(task, user)) - {auth.agent}
+        if wanted is not None:
+            pool &= {w for w in wanted if w}
+        return sorted(pool)
+    if not bound:
+        return [None]
+    if wanted is not None:
+        picked = sorted(w for w in wanted if w in bound)
+        return picked or [None]
+    return [None, *sorted(bound & worked_agents(task, user))]
+
+
 def notify(
     db: Session,
     auth: "Auth",
@@ -74,7 +130,9 @@ def notify(
     kind: NotifyKind,
     text: str | None = None,
     comment_id: int | None = None,
+    agents: dict[int, set[str | None]] | None = None,
 ) -> list[Notification]:
+    """`agents` narrows a bot recipient to some of its agents: {user_id: {"cs-agent-a"}}."""
     from app.routers.tasks import _can_see  # visibility rules live with the routes
 
     out: list[Notification] = []
@@ -83,29 +141,36 @@ def notify(
         if user is None or user.id in seen:
             continue
         seen.add(user.id)
-        if user.id == auth.user.id or not user.is_active:
+        if not user.is_active:
+            continue
+        same = user.id == auth.user.id
+        if same and not (user.is_bot and auth.user.bound_agent):
             continue
         bot_kinds = WORKER_BOT_KINDS if user.is_worker_bot else BOT_KINDS
-        if user.is_bot and (kind not in bot_kinds or auth.user.is_bot):
+        if user.is_bot and (kind not in bot_kinds or (auth.user.is_bot and not same)):
             continue
         if kind in LEAD_ONLY_KINDS and not user.is_lead:
             continue
         if not _can_see(task, user):
             continue
-        row = Notification(
-            user_id=user.id,
-            task_id=task.id,
-            comment_id=comment_id,
-            kind=kind,
-            actor_id=auth.user.id,
-            actor_kind=auth.kind,
-            agent_name=auth.agent,
-            text=_excerpt(task, text),
-            created_at=utcnow(),
-            email_state="pending" if not user.is_bot and wants_email(user, kind) else "skipped",
-        )
-        db.add(row)
-        out.append(row)
+        for for_agent in _targets(db, auth, user, task, (agents or {}).get(user.id)):
+            row = Notification(
+                user_id=user.id,
+                for_agent=for_agent,
+                task_id=task.id,
+                comment_id=comment_id,
+                kind=kind,
+                actor_id=auth.user.id,
+                actor_kind=auth.kind,
+                agent_name=auth.agent,
+                text=_excerpt(task, text),
+                created_at=utcnow(),
+                email_state=("pending" if for_agent is None and not user.is_bot and wants_email(user, kind)
+                             else "skipped"),
+            )
+            row.user = user
+            db.add(row)
+            out.append(row)
     return out
 
 

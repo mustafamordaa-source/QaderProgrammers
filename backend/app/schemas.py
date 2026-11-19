@@ -179,6 +179,9 @@ class ApiTokenCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     scopes: list[str] | None = None
     expires_days: int = Field(default=30, ge=1)
+    # Bot tokens only: the one agent this token acts as (for example cs-agent-b).
+    agent_name: str | None = Field(default=None, min_length=2, max_length=80,
+                                   pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 class ApiTokenOut(ORMModel):
@@ -190,6 +193,7 @@ class ApiTokenOut(ORMModel):
     expires_at: datetime
     last_used_at: datetime | None
     revoked_at: datetime | None
+    agent_name: str | None = None
 
 
 class ApiTokenCreated(ApiTokenOut):
@@ -961,6 +965,9 @@ class TaskBrief(BaseModel):
     # Everyone on it, e.g. "@sara part 2 via HUB-31", and "n/m taken" for its parts.
     people: list[str] = []
     parts: str = ""
+    # Restricted: only leads, admins and the assignees see it. Assign-only: a lead picks who works it.
+    restricted: bool = False
+    assign_only: bool = False
 
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")

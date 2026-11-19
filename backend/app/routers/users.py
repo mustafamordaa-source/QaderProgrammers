@@ -293,7 +293,9 @@ def issue_bot_token(
 ) -> ApiTokenCreated:
     """Issue a token for a bot. A plain bot's scopes are limited to reading,
     proposing tasks and commenting on its own proposals; a bot with `can_work`
-    may also hold the member scopes."""
+    may also hold the member scopes. `agent_name` binds the token to one agent:
+    several agents can then share the bot and each keeps its own claims, `mine`
+    and notifications."""
     user = _get_user_or_404(db, user_id)
     if not user.is_bot:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not a bot account")
@@ -321,6 +323,7 @@ def issue_bot_token(
         scopes=sorted(set(scopes)),
         created_at=now,
         expires_at=now + timedelta(days=payload.expires_days),
+        agent_name=payload.agent_name,
     )
     db.add(row)
     db.commit()

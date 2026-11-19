@@ -83,6 +83,8 @@ def whoami(auth: AuthCtx) -> dict:
         "scopes": sorted(auth.scopes),
         "token": None,
         "token_max_days": settings.api_token_max_days,
+        # A bot that works tasks like a member (assigned, claims, hand-backs).
+        "can_work": bool(auth.user.is_worker_bot),
     }
     if auth.token is not None:
         out["token"] = {
@@ -90,6 +92,8 @@ def whoami(auth: AuthCtx) -> dict:
             "name": auth.token.name,
             "prefix": auth.token.prefix,
             "expires_at": auth.token.expires_at.isoformat(),
+            # Set when an admin issued this bot token for one agent.
+            "agent_name": auth.token.agent_name,
         }
     return out
 
@@ -162,6 +166,11 @@ def create_token(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"expires_days: at most {settings.api_token_max_days}",
+        )
+    if payload.agent_name is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="agent_name: only bot tokens carry a fixed agent name (an admin issues them on the Users page)",
         )
     scopes = payload.scopes if payload.scopes is not None else list(DEFAULT_TOKEN_SCOPES)
     unknown = sorted(set(scopes) - set(SCOPES))
