@@ -278,6 +278,11 @@ class User(Base):
     notify_kinds: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     notify_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Not a column. `get_auth` sets it on every request: the agent name fixed on
+    # the API token in use (see ApiToken.agent_name), or None. Claims, `mine`,
+    # notifications and the lock column then compare user plus agent.
+    bound_agent = None
+
     @property
     def effective_roles(self) -> list[str]:
         if self.roles:
@@ -576,6 +581,10 @@ class ApiToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # A bot token an admin issued for one agent (for example cs-agent-b). Writes
+    # with it act as that agent whatever X-Agent says, and claims, `mine` and
+    # notifications follow the user plus this name. None: the old behaviour.
+    agent_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
     user: Mapped[User] = relationship(lazy="joined")
 
@@ -833,6 +842,9 @@ class Notification(Base):
         _str_enum(ActorKind, "notify_actor_kind"), default=ActorKind.human, nullable=False
     )
     agent_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # For a user whose tokens carry agent names: the one agent this row is for.
+    # None: the row for the user's web login and tokens without an agent name.
+    for_agent: Mapped[str | None] = mapped_column(String(80), nullable=True)
     # Short excerpt; empty for restricted tasks.
     text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False, index=True)

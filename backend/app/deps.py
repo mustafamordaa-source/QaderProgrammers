@@ -4,7 +4,8 @@ Two ways in:
 
 - a browser login (JWT) acts as a human with every scope its role allows;
 - a personal API token (`qhub_...`) acts as an agent for the token's owner,
-  limited to the token's scopes, and must name the agent in `X-Agent`.
+  limited to the token's scopes, and must name the agent in `X-Agent`; a bot
+  token issued with an agent name acts as that agent and nothing else.
 """
 
 from __future__ import annotations
@@ -119,6 +120,16 @@ def get_auth(
             settings.rate_token_writes_per_minute if write else settings.rate_token_reads_per_minute,
         )
         agent = (x_agent or "").strip()[:80]
+        if token.agent_name:
+            # A token issued for one agent acts as that agent. A different
+            # X-Agent on a write is refused, so two agents never mix up who did what.
+            if write and agent and agent != token.agent_name:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(f"This API token belongs to agent '{token.agent_name}'; send X-Agent: "
+                            f"{token.agent_name} or leave it out."),
+                )
+            agent = token.agent_name
         if write and agent.lower() in _BAD_AGENT_NAMES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -140,6 +151,9 @@ def get_auth(
     else:
         user = _user_from_jwt(raw, db)
         auth = Auth(user=user, kind=ActorKind.human, scopes=set(SCOPES))
+
+    # Reset on every request: the same User object can outlive one request.
+    user.bound_agent = auth.token.agent_name if auth.token is not None and auth.token.agent_name else None
 
     if not user.is_active:
         # Deactivating someone must revoke the token they already hold, not just

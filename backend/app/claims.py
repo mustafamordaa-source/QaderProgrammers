@@ -55,15 +55,23 @@ def renew_on_activity(db: Session, task_id: int, user_id: int, now: datetime | N
     task.claim_warned_at = None
 
 
-def _note(db: Session, user: User | None, task: Task, kind: NotifyKind, text: str, now: datetime) -> None:
+def _note(db: Session, user: User | None, task: Task, kind: NotifyKind, text: str, now: datetime,
+          agent: str | None = None) -> None:
     """A notification with no actor: the hub itself sends it."""
     from app.notify import wants_email
     from app.routers.tasks import _can_see
 
     if user is None or not user.is_active or user.is_plain_bot or not _can_see(task, user):
         return
+    # About a bot's claim: the row goes to the agent holding it, when that agent has its own token.
+    for_agent = None
+    if user.is_bot and agent:
+        from app.notify import bound_agents
+
+        if agent in bound_agents(db, user):
+            for_agent = agent
     db.add(Notification(
-        user_id=user.id, task_id=task.id, kind=kind, actor_id=None, actor_kind=ActorKind.human,
+        user_id=user.id, for_agent=for_agent, task_id=task.id, kind=kind, actor_id=None, actor_kind=ActorKind.human,
         text=text, created_at=now,
         email_state="pending" if not user.is_bot and wants_email(user, kind) else "skipped",
     ))
@@ -108,7 +116,7 @@ def sweep(db: Session, now: datetime | None = None) -> dict[str, int]:
             where = f"back in {origin.value.replace('_', ' ')}" if back else "still in progress"
             text = (f"Your claim was freed after {settings.claim_idle_free_hours:g} hours without activity; "
                     f"the task is {where} and anyone on its side can take it.")
-            _note(db, holder, task, NotifyKind.claim_freed, text, now)
+            _note(db, holder, task, NotifyKind.claim_freed, text, now, agent=data["agent"])
             if lead_list is None:
                 lead_list = leads(db)
             for lead in lead_list:
@@ -122,7 +130,7 @@ def sweep(db: Session, now: datetime | None = None) -> dict[str, int]:
             hours = max(1, round(left.total_seconds() / 3600))
             _note(db, holder, task, NotifyKind.claim_idle,
                   f"No activity on your claim for {settings.claim_idle_warn_hours:g} hours. Post an update or "
-                  f"release it; it is freed in about {hours} hours.", now)
+                  f"release it; it is freed in about {hours} hours.", now, agent=task.claim_agent)
             task.claim_warned_at = now
             reminded += 1
     db.commit()

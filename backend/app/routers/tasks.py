@@ -167,15 +167,65 @@ def _visible_filter(user: User):
     )
 
 
+def _agent_ok(claim_agent: str | None, user: User) -> bool:
+    """For a token bound to one agent, only that agent's claim counts as the caller's."""
+    return user.bound_agent is None or claim_agent == user.bound_agent
+
+
+def _holds(task: Task, user: User, now=None) -> bool:
+    """Does the caller hold the live claim? A token bound to an agent compares user plus agent."""
+    now = now or utcnow()
+    return task.claim_is_live(now) and task.claimed_by == user.id and _agent_ok(task.claim_agent, user)
+
+
+def _sibling_holds(task: Task, user: User, now=None) -> bool:
+    """Another agent of the same bot user holds the live claim."""
+    now = now or utcnow()
+    return (user.bound_agent is not None and task.claim_is_live(now) and task.claimed_by == user.id
+            and task.claim_agent != user.bound_agent)
+
+
+def _mine_clause(user: User, now):
+    """SQL for "my tasks": assigned to me, or claimed by me. For a token bound to an
+    agent: claimed by this agent, or assigned to the bot and not held by another agent."""
+    assigned = or_(Task.assignee_1_id == user.id, Task.assignee_2_id == user.id)
+    if user.bound_agent is None:
+        return or_(assigned, Task.claimed_by == user.id)
+    own_claim = and_(Task.claimed_by == user.id, Task.claim_agent == user.bound_agent)
+    # Spelled out, not NOT(...): NULL columns would drop the row otherwise.
+    no_sibling = or_(Task.claimed_by.is_(None), Task.claimed_by != user.id, Task.claim_expires_at.is_(None),
+                     Task.claim_expires_at <= now, Task.claim_agent == user.bound_agent)
+    return or_(own_claim, and_(assigned, no_sibling))
+
+
 def _is_worker(task: Task, user: User) -> bool:
     """May this person work on the task (not just read it)?"""
     if user.is_lead:
         return True
     if user.is_read_only:
         return False
+    if _sibling_holds(task, user):
+        # Several agents share one bot: the one holding the claim works the task.
+        return False
     if user.id in task.assignee_ids:
         return True
-    return task.open_to_side and task.claimed_by == user.id and task.claim_is_live(utcnow())
+    return task.open_to_side and _holds(task, user)
+
+
+def _bot_worked_on(task: Task, bot: User) -> bool:
+    """A worker bot keeps its voice on a task it claimed, handed back or sent to
+    review, after the claim cleared, until the task closes. Any agent of the bot
+    counts, so a reviewer agent can answer on a task another agent worked."""
+    if task.status in CLOSED_STATUSES:
+        return False
+    for e in task.events:
+        if e.actor_id != bot.id:
+            continue
+        if e.event_type is EventType.claimed:
+            return True
+        if e.event_type is EventType.status_changed and e.to_status is S.in_review:
+            return True
+    return any(c.author_id == bot.id and c.kind is CommentKind.handback for c in task.comments)
 
 
 def _assert_worker(task: Task, user: User) -> None:
@@ -235,7 +285,7 @@ def _out(task: Task, model=TaskOut, user: User | None = None, **extra):
     if user is not None:
         now = utcnow()
         code, text = _claim_block(task, user, now)
-        mine = task.claim_is_live(now) and task.claimed_by == user.id
+        mine = _holds(task, user, now)
         row.claimable = code is None and not mine
         row.claim_block, row.claim_block_text = (None, None) if mine else (code, text)
         row.can_assign = user.is_lead or _assign_block(task, user) is None
@@ -320,8 +370,10 @@ def _claim_block(task: Task, user: User, now, ignore_side: bool = False) -> tupl
     blockers = task.open_blockers()
     if blockers:
         return "blocked_by", "Waits for " + ", ".join(f"HUB-{b}" for b in blockers)
-    if task.claim_is_live(now) and task.claimed_by != user.id:
+    if task.claim_is_live(now) and not _holds(task, user, now):
         holder = _handle(task.claimer) if task.claimer else "someone"
+        if task.claimed_by == user.id and task.claim_agent:
+            holder = f"{holder}/{task.claim_agent} (another agent of this bot)"
         return "claimed", f"Claimed by {holder} until {task.claim_expires_at:%Y-%m-%d %H:%M}Z"
     if not user.is_lead and _parts_held_by_others(task, user, now):
         return "parts_taken", "Others are working on its parts; take a free part instead"
@@ -331,7 +383,7 @@ def _claim_block(task: Task, user: User, now, ignore_side: bool = False) -> tupl
 def _parts_held_by_others(task: Task, user: User, now) -> bool:
     for c in task.criteria:
         sub = _part_holder(c)
-        if sub is not None and sub.status not in CLOSED_STATUSES and sub.claim_is_live(now) and sub.claimed_by != user.id:
+        if sub is not None and sub.status not in CLOSED_STATUSES and sub.claim_is_live(now) and not _holds(sub, user, now):
             return True
     return False
 
@@ -371,8 +423,10 @@ def _take_block(task: Task, criterion: Criterion, user: User, ignore_side: bool 
     if task.status not in CLAIM_FROM:
         code, text = _claim_block(task, user, utcnow())
         return text or "The task cannot take new work now"
-    if not user.is_lead and task.claim_is_live(utcnow()) and task.claimed_by != user.id:
+    if not user.is_lead and task.claim_is_live(utcnow()) and not _holds(task, user):
         who = _handle(task.claimer) if task.claimer else "someone"
+        if task.claimed_by == user.id and task.claim_agent:
+            who = f"{who}/{task.claim_agent}"
         return f"{who} holds the whole task"
     blockers = task.open_blockers()
     if blockers:
@@ -899,7 +953,7 @@ def list_tasks(
             t for t in db.scalars(rows_stmt).unique()
             if (not tag or tag in (t.tags or []))
             and (not (ready or claimable) or _claim_block(t, user, now)[0] is None)
-            and (not (ready or claimable) or not (t.claim_is_live(now) and t.claimed_by == user.id))
+            and (not (ready or claimable) or not _holds(t, user, now))
         ]
         if ready:
             # Planned work first; inside each lane the chosen sort (stable sort keeps SQL order).
@@ -1004,7 +1058,7 @@ def _filtered(
 
     mine_filter = or_(Task.assignee_1_id == user.id, Task.assignee_2_id == user.id)
     if mine:
-        stmt = stmt.where(or_(mine_filter, Task.claimed_by == user.id))
+        stmt = stmt.where(_mine_clause(user, now))
     elif assignee_id is not None:
         stmt = stmt.where(or_(Task.assignee_1_id == assignee_id, Task.assignee_2_id == assignee_id))
 
@@ -1160,7 +1214,7 @@ def facets(
     for t in db.scalars(stmt).unique():
         if tag and tag not in (t.tags or []):
             continue
-        free = _claim_block(t, user, now)[0] is None and not (t.claim_is_live(now) and t.claimed_by == user.id)
+        free = _claim_block(t, user, now)[0] is None and not _holds(t, user, now)
         if (ready or claimable) and not free:
             continue
         if ready and t.status not in LANES:
@@ -1215,7 +1269,7 @@ def inbox(auth: AuthCtx, db: DbSession, response: Response, paging: Page) -> lis
                 )
             )
 
-    mine = or_(Task.assignee_1_id == user.id, Task.assignee_2_id == user.id, Task.claimed_by == user.id)
+    mine = _mine_clause(user, utcnow())
     for t in db.scalars(
         select(Task).where(mine, Task.status.in_([S.blocked, S.needs_confirm])).order_by(Task.updated_at, Task.id)
     ).unique():
@@ -1739,7 +1793,7 @@ def brief(task_id: int, auth: AuthCtx, db: DbSession) -> TaskBrief:
     truncated |= len(task.docs) > 8 or len(task.context) > 8
     now = utcnow()
     code, text = _claim_block(task, auth.user, now)
-    if task.claim_is_live(now) and task.claimed_by == auth.user.id:
+    if _holds(task, auth.user, now):
         claimable, code, text = False, None, None
     else:
         claimable = code is None
@@ -1785,6 +1839,8 @@ def brief(task_id: int, auth: AuthCtx, db: DbSession) -> TaskBrief:
             for p in _people_on(task)
         ][:12],
         parts=f"{sum(1 for c in task.criteria if _part_holder(c) is not None)}/{len(task.criteria)} taken",
+        restricted=bool(task.restricted),
+        assign_only=bool(task.assign_only),
     )
 
 
@@ -1988,12 +2044,20 @@ def change_status(
         db.flush()
         _tell_leads_when_family_closes(db, auth, task)
     workers = _people(db, task.assignee_ids)
+    worker_agents = None
+    handbacks = [c for c in task.comments if c.kind is CommentKind.handback]
+    if handbacks and from_status is S.in_review:
+        last = handbacks[-1]
+        if last.author_id not in task.assignee_ids:
+            workers += _people(db, [last.author_id])
+        if last.agent_name:
+            worker_agents = {last.author_id: {last.agent_name}}
     if target is S.in_review:
         notify(db, auth, users=leads(db), task=task, kind=NotifyKind.review, text=task.summary or comment)
     elif from_status is S.in_review and target is S.done:
-        notify(db, auth, users=workers, task=task, kind=NotifyKind.approved, text=comment)
+        notify(db, auth, users=workers, task=task, kind=NotifyKind.approved, text=comment, agents=worker_agents)
     elif from_status is S.in_review and target is S.in_progress:
-        notify(db, auth, users=workers, task=task, kind=NotifyKind.rejected, text=comment)
+        notify(db, auth, users=workers, task=task, kind=NotifyKind.rejected, text=comment, agents=worker_agents)
     db.commit()
     return _detail(_get_task_or_404(db, task.id), auth.user)
 
@@ -2053,7 +2117,7 @@ def _assign_block(task: Task, user: User) -> str | None:
         return "Lead assigns this one to a chosen person"
     if task.status in CLOSED_STATUSES or task.status is S.proposed:
         return f"A {task.status.value} task cannot be assigned"
-    mine = user.id in task.assignee_ids or (task.claimed_by == user.id and task.claim_is_live(utcnow()))
+    mine = user.id in task.assignee_ids or _holds(task, user)
     if task.assignee_ids and not mine:
         return "Someone else is assigned; ask them or a lead to hand it over"
     return None
@@ -2214,6 +2278,7 @@ def _claim(db: Session, auth: Auth, task: Task, agent_name: str | None, ttl_hour
             Task.claimed_by == user.id,
             Task.claim_expires_at > now,
             Task.id != task.id,
+            *([Task.claim_agent == user.bound_agent] if user.bound_agent else []),
         )
     ) or 0
     if active + 1 > (user.wip_limit or 2):
@@ -2341,11 +2406,12 @@ def release_task(
     _assert_visible(task, user)
     if task.claimed_by is None:
         return _detail(task, auth.user)
-    if task.claimed_by != user.id and not user.is_lead:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the claim holder or a leader can release this claim",
-        )
+    if not user.is_lead and not (task.claimed_by == user.id and _agent_ok(task.claim_agent, user)):
+        detail = "Only the claim holder or a leader can release this claim"
+        if task.claimed_by == user.id:
+            detail = (f"Agent {task.claim_agent} of this bot holds this claim; only that agent "
+                      "or a lead can release it")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
     data = {"agent": task.claim_agent, "holder": task.claimed_by}
     origin = _claim_origin(task) if task.status is S.in_progress else None
     if origin is not None and not any(c.status not in CLOSED_STATUSES for c in task.children):
@@ -2368,13 +2434,21 @@ def _section(body: str, heading: str) -> str | None:
     return match.group(1).strip() if match and match.group(1) else None
 
 
+def _worker_bot_refusal(task: Task) -> str:
+    return (f"This bot posts on tasks it holds or worked on. HUB-{task.id} is not assigned to it, and it has "
+            "no claim, hand-back or review move here (status in_review and release end a claim, but a "
+            "hand-back keeps the right to post). Claim it first, ask a lead to assign it, or reply in a "
+            "thread where someone tagged the bot.")
+
+
 def _assert_bot_may_reply(db: Session, bot: User, task: Task, parent: Comment | None, kind: CommentKind) -> None:
     """A bot comments on its own proposals, and otherwise only replies in a
     thread where someone tagged it or asked it a question, within a daily cap."""
     if parent is None or kind not in (CommentKind.note, CommentKind.answer):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="A bot comments only on tasks it proposed, or replies (note or answer, with parent_id) in a thread where someone tagged it",
+            detail=_worker_bot_refusal(task) if bot.is_worker_bot else
+            "A bot comments only on tasks it proposed, or replies (note or answer, with parent_id) in a thread where someone tagged it",
         )
     if kind is CommentKind.answer and parent.to_user_id != bot.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A bot answers only questions asked of it; reply with a note")
@@ -2388,7 +2462,10 @@ def _assert_bot_may_reply(db: Session, bot: User, task: Task, parent: Comment | 
         )
     )
     if not tagged:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nobody tagged this bot in that thread")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_worker_bot_refusal(task) if bot.is_worker_bot else "Nobody tagged this bot in that thread",
+        )
     since = utcnow() - timedelta(days=1)
     sent = db.scalar(
         select(func.count(Comment.id))
@@ -2430,9 +2507,12 @@ def add_comment(
         if parent.parent_id is not None:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Reply to the top-level comment; threads are one level deep")
 
-    # A bot that works this task comments like a member; any other bot only
+    # A bot that works this task, or worked it (claimed, handed back, sent to
+    # review) while it stays open, comments like a member; any other bot only
     # replies where it was tagged.
-    if user.is_bot and task.created_by != user.id and not (user.is_worker_bot and _is_worker(task, user)):
+    if user.is_bot and task.created_by != user.id and not (
+        user.is_worker_bot and (_is_worker(task, user) or _bot_worked_on(task, user))
+    ):
         _assert_bot_may_reply(db, user, task, parent, payload.kind)
 
     to_user = None
@@ -2500,20 +2580,30 @@ def add_comment(
     if payload.kind is CommentKind.question:
         told += notify(db, auth, users=[to_user], task=task, kind=NotifyKind.question, text=body, comment_id=comment.id)
     elif payload.kind is CommentKind.answer:
-        told += notify(db, auth, users=_people(db, [parent.author_id]), task=task, kind=NotifyKind.answered, text=body, comment_id=comment.id)
+        # The answer goes to the agent that asked, when a bot asked it.
+        asker = {parent.author_id: {parent.agent_name}} if parent.agent_name else None
+        told += notify(db, auth, users=_people(db, [parent.author_id]), task=task, kind=NotifyKind.answered,
+                       text=body, comment_id=comment.id, agents=asker)
     already = {to_user.id} if to_user else set()
     if payload.kind is CommentKind.answer:
         already.add(parent.author_id)
     mentioned = [u for u in by_handles(db, mentioned_handles(body)) if u.id not in already]
+    if user.is_worker_bot and user.bound_agent and user.id not in already and all(u.id != user.id for u in mentioned):
+        # One agent of a shared bot posted (a reviewer's verdict, say): the bot's
+        # other agents that worked this task hear about it (notify picks them).
+        mentioned.append(user)
     told += notify(db, auth, users=mentioned, task=task, kind=NotifyKind.mention, text=body, comment_id=comment.id)
-    notified_ids = [n.user_id for n in told]
 
     db.commit()
     db.refresh(comment)
     # Who the hub actually told, so an agent can confirm a mention landed.
-    comment.notified = [
-        (u.handle or u.name) for u in _people(db, notified_ids)
-    ]
+    names: list[str] = []
+    for n in told:
+        who = n.user.handle or n.user.name if n.user else str(n.user_id)
+        label = f"{who}/{n.for_agent}" if n.for_agent else who
+        if label not in names:
+            names.append(label)
+    comment.notified = names
     return comment
 
 

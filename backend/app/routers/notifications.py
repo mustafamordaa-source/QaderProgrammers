@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
 
 from app import mailer, ratelimit
 from app.config import settings
@@ -31,6 +31,8 @@ class NotificationOut(BaseModel):
     actor: str | None
     actor_kind: ActorKind
     agent_name: str | None
+    # Set on a row for one agent of a shared bot.
+    for_agent: str | None = None
     text: str | None
     created_at: object
     read_at: object | None
@@ -62,6 +64,14 @@ class PreferencesUpdate(BaseModel):
     notify_address: EmailStr | str | None = None
 
 
+def _own(user: User):
+    """The caller's rows: a token bound to an agent reads that agent's rows only;
+    a web login and an unbound token read the plain rows."""
+    if user.bound_agent:
+        return and_(Notification.user_id == user.id, Notification.for_agent == user.bound_agent)
+    return and_(Notification.user_id == user.id, Notification.for_agent.is_(None))
+
+
 def _question_open(n: Notification) -> bool | None:
     if n.kind is not NotifyKind.question or n.comment_id is None:
         return None
@@ -81,6 +91,7 @@ def _out(n: Notification) -> NotificationOut:
         actor=(n.actor.handle or n.actor.name) if n.actor else None,
         actor_kind=n.actor_kind,
         agent_name=n.agent_name,
+        for_agent=n.for_agent,
         text=n.text,
         created_at=n.created_at,
         read_at=n.read_at,
@@ -99,9 +110,11 @@ def list_notifications(
     expand: str | None = Query(default=None, max_length=40,
                                description="task, thread (comma list): add the task snapshot, the comment "
                                            "thread and suggested commands to each row"),
+    order: str = Query(default="desc", pattern=r"^(asc|desc)$",
+                       description="desc (default): newest first; asc: oldest first, so page 1 holds the oldest"),
 ) -> list[NotificationOut]:
     wanted = {x.strip() for x in (expand or "").split(",") if x.strip()}
-    stmt = select(Notification).where(Notification.user_id == user.id)
+    stmt = select(Notification).where(_own(user))
     if wanted:
         from sqlalchemy.orm import selectinload
 
@@ -114,11 +127,12 @@ def list_notifications(
         )
     if unread:
         stmt = stmt.where(Notification.read_at.is_(None))
+    by_id = Notification.id.asc() if order == "asc" else Notification.id.desc()
     if paging.on:
         paging.set_headers(response, count_rows(db, stmt))
-        stmt = paging.window(stmt.order_by(Notification.id.desc()))
+        stmt = paging.window(stmt.order_by(by_id))
     else:
-        stmt = stmt.order_by(Notification.id.desc()).limit(limit)
+        stmt = stmt.order_by(by_id).limit(limit)
     from app.routers.tasks import _can_see
 
     rows = db.scalars(stmt).unique()
@@ -141,7 +155,10 @@ def _snapshot(task, user) -> dict:
     now = utcnow()
     claim = None
     if task.claim_is_live(now) and task.claimer:
-        claim = f"{task.claimer.handle or task.claimer.name} until {task.claim_expires_at:%Y-%m-%d %H:%M}Z"
+        who = task.claimer.handle or task.claimer.name
+        if task.claim_agent:
+            who = f"{who}/{task.claim_agent}"
+        claim = f"{who} until {task.claim_expires_at:%Y-%m-%d %H:%M}Z"
     taken = sum(1 for c in task.criteria if _part_holder(c) is not None)
     return {
         "id": task.id,
@@ -155,6 +172,7 @@ def _snapshot(task, user) -> dict:
         "audience": task.audience,
         "requested_by": task.requested_by,
         "restricted": task.restricted,
+        "assign_only": task.assign_only,
         "claim": claim,
         "assignees": [u.handle or u.name for u in (task.assignee_1, task.assignee_2) if u],
         "parts": f"{taken}/{len(task.criteria)} taken",
@@ -214,18 +232,14 @@ def _expand(row: NotificationOut, n: Notification, user: User, wanted: set[str])
 @router.get("/count")
 def unread_count(user: CurrentUser, db: DbSession) -> dict[str, int]:
     n = db.scalar(
-        select(func.count(Notification.id)).where(
-            Notification.user_id == user.id, Notification.read_at.is_(None)
-        )
+        select(func.count(Notification.id)).where(_own(user), Notification.read_at.is_(None))
     )
     return {"unread": n or 0}
 
 
 @router.post("/read")
 def mark_read(payload: ReadRequest, user: CurrentUser, db: DbSession) -> dict[str, int]:
-    stmt = update(Notification).where(
-        Notification.user_id == user.id, Notification.read_at.is_(None)
-    )
+    stmt = update(Notification).where(_own(user), Notification.read_at.is_(None))
     if not payload.all:
         if not payload.ids:
             return {"marked": 0}

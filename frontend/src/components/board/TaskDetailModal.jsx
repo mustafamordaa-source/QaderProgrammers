@@ -265,6 +265,13 @@ export default function TaskDetailModal({
         <span className="tabular ml-auto text-[11px] text-ink-muted">Version {task.version}</span>
       </div>
 
+      {task.restricted && (
+        <p role="note" className="mt-3 rounded-lg border border-critical/30 px-3 py-2 text-xs text-ink-secondary">
+          <span className="font-medium text-critical">Restricted.</span> Only leads, admins and the people assigned
+          see this task. Keep its text out of other tasks, comments, pull requests and repo files.
+        </p>
+      )}
+
       <StatusActions ctx={ctx} />
 
       {error && (

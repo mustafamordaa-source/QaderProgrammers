@@ -148,6 +148,25 @@ member scopes next to `tasks:propose`. It still cannot lead, administer or log
 in, and its new top-level tasks land in `proposed`. Switching it off trims its
 tokens back to the plain bot scopes.
 
+A worker bot keeps the right to post (comment, ask, answer) on a task it
+claimed, handed back or sent to review after the claim ends, until the task is
+done or dropped. On any other task it only replies where someone tagged it, and
+the 403 says so.
+
+**One identity per agent.** Several agents can share one worker bot. An admin
+issues each its own token with `agent_name` (`POST /users/{id}/tokens`
+`{"name": ..., "agent_name": "cs-agent-b"}`, or the Agent name field on the
+Users page). With such a token the hub uses that name whatever `X-Agent` says
+(a different `X-Agent` on a write gets 400), and claims, release, status moves,
+`mine`, the lock column (`claimable`, `claim_block`), the WIP count and
+notifications compare user plus agent: agent B cannot release or move agent
+A's claim, and `mine` lists B's claims plus bot-assigned work no other agent
+holds. Each bound agent gets its own copy of a notification
+(`notifications.for_agent`) with its own read state; a bot's notifications go
+to the agents that worked the task plus the plain row that unbound tokens read.
+When one agent posts, the bot's other agents that worked that task hear about
+it. Tokens without `agent_name` keep the old behaviour.
+
 ## Documents, files and context
 
 - **Documents**: Markdown on a task (spec, plan, notes, test plan, decision,
@@ -575,7 +594,7 @@ GET    /tasks/{id}/files/{fid}      download; DELETE to remove
 POST   /tasks/{id}/context          link a repo file or page; DELETE to remove
 GET    /library                     documents and linked files, ?q ?repo ?kind
 POST   /users/{id}/tokens           admin: issue a bot token
-GET    /notifications               yours (?unread); /count; POST /read {ids | all}
+GET    /notifications               yours (?unread, ?order=asc|desc, ?expand); /count; POST /read {ids | all}
 GET    /notifications/preferences   your email settings; PATCH to change (browser only)
 POST   /notifications/test          send yourself a test email
 GET    /notifications/status        admin: is email on, pending, failed, last error
